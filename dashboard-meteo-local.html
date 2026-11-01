@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard météo — Station MyMeteoData (Supabase)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --primary: #003748;
+    --deep: #002E3D;
+    --light: #DCF0F0;
+    --light2: #DBF0F0;
+    --cyan: #00DBDB;
+    --magenta: #FF00D3;
+    --red: #ED0036;
+    --gray: #809BA3;
+    --text: #33515E;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 16px;
+    background: #ffffff;
+    font-family: "Sora", Arial, sans-serif;
+    color: var(--text);
+  }
+  .wrap { max-width: 1150px; margin: 0 auto; }
+  h1 { font-size: 28px; font-weight: 700; color: var(--primary); margin: 0; }
+  .underline { height: 6px; width: 320px; background: var(--cyan); border-radius: 3px; margin: 8px 0 12px; }
+  .subtitle { font-size: 13px; color: var(--text); max-width: 760px; margin: 0 0 14px; }
+  .pills { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+  .pill {
+    display: inline-block; padding: 4px 14px; border-radius: 999px;
+    background: #fff; border: 2px solid var(--magenta); color: var(--magenta);
+    font-size: 11px; font-weight: 700;
+  }
+  .controls {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+    margin-bottom: 18px; padding: 14px; border-radius: 16px;
+    background: linear-gradient(180deg, var(--light) 0%, var(--light2) 100%);
+    border: 2px solid rgba(0,55,72,0.18);
+  }
+  .controls label { font-size: 12px; font-weight: 700; color: var(--primary); }
+  select, button {
+    font-family: "Sora", Arial, sans-serif; font-size: 13px; font-weight: 600;
+    padding: 8px 14px; border-radius: 10px; border: 1.5px solid var(--primary);
+    background: #fff; color: var(--primary); cursor: pointer;
+  }
+  button.primary { background: var(--primary); color: #fff; }
+  button.secondary { background: #fff; color: var(--primary); }
+  button:disabled { opacity: 0.5; cursor: wait; }
+  .status { font-size: 12px; color: var(--text); flex: 1 1 200px; min-width: 180px; }
+  .status.error { color: var(--red); font-weight: 700; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .kpi {
+    border-radius: 16px; padding: 14px;
+    background: linear-gradient(180deg, var(--light) 0%, var(--light2) 100%);
+    border: 2px solid rgba(0,55,72,0.18);
+  }
+  .kpi .label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; color: var(--gray); }
+  .kpi .value { font-size: 26px; font-weight: 700; color: var(--primary); margin-top: 4px; line-height: 1; }
+  .kpi .value .unit { font-size: 14px; color: var(--text); font-weight: 600; margin-left: 3px; }
+  .kpi .value.red { color: var(--red); }
+  .kpi .value.magenta { color: var(--magenta); }
+  .kpi .sub { font-size: 11px; color: var(--text); margin-top: 6px; }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(470px, 1fr)); gap: 16px; }
+  .card {
+    border-radius: 16px; overflow: hidden; border: 2px solid rgba(0,55,72,0.18);
+    background: linear-gradient(180deg, var(--light) 0%, var(--light2) 100%);
+  }
+  .card h3 {
+    margin: 0; padding: 10px 16px; background: var(--primary); color: #fff;
+    font-size: 13px; font-weight: 700;
+  }
+  .card h3 span { font-size: 11px; color: #9fd8d8; font-weight: 400; margin-left: 8px; }
+  .card .body { padding: 14px; position: relative; height: 280px; }
+  .card.wide { grid-column: 1 / -1; }
+  .latest {
+    display: flex; flex-wrap: wrap; gap: 8px 40px; padding: 14px 16px;
+  }
+  .latest .item .k { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; color: var(--gray); }
+  .latest .item .v { font-size: 16px; font-weight: 700; color: var(--primary); }
+  .notes { margin-top: 16px; padding: 14px 16px; }
+  .notes h4 { margin: 0 0 10px; font-size: 13px; }
+  .notes ul { margin: 0; padding: 0; list-style: none; }
+  .notes li { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 8px; font-size: 12px; line-height: 1.45; }
+  .notes li .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex: none; }
+  .dot.c { background: var(--cyan); } .dot.g { background: var(--gray); } .dot.r { background: var(--red); }
+  footer { margin-top: 20px; font-size: 11px; color: var(--gray); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Dashboard météo — Station MyMeteoData</h1>
+  <div class="underline"></div>
+  <p class="subtitle">
+    Application locale autonome : elle interroge directement votre base Supabase (projet Meteo project)
+    en lecture seule via l'API REST, avec la clé publiable. Aucune donnée n'est modifiée.
+    Une connexion Internet est requise.
+  </p>
+  <div class="pills">
+    <span class="pill">Source : Supabase · Meteo project</span>
+    <span class="pill">Lecture seule · clé publiable</span>
+    <span class="pill">PostgreSQL 17 · RLS actif</span>
+  </div>
+
+  <div class="controls">
+    <label for="period">Période :</label>
+    <select id="period">
+      <option value="y2026" selected>Année civile 2026</option>
+      <option value="y2025">Année civile 2025</option>
+      <option value="y2024">Année civile 2024</option>
+      <option value="d30">30 derniers jours</option>
+      <option value="d90">90 derniers jours</option>
+      <option value="m12">12 derniers mois</option>
+      <option value="all">Tout l'historique (depuis nov. 2023)</option>
+    </select>
+    <button id="refresh" class="primary" onclick="load()">Actualiser</button>
+    <button id="export" class="secondary" onclick="exportCsv()">Export CSV journalier</button>
+    <div id="status" class="status">Prêt. Choisissez une période puis cliquez sur Actualiser.</div>
+  </div>
+
+  <div class="kpis" id="kpis"></div>
+
+  <div class="charts">
+    <div class="card wide">
+      <h3>Dernier relevé disponible <span>table MyMeteoData</span></h3>
+      <div class="latest" id="latest"></div>
+    </div>
+
+    <div class="card wide">
+      <h3>Températures journalières <span>minimale / moyenne / maximale (°C)</span></h3>
+      <div class="body"><canvas id="chDaily"></canvas></div>
+    </div>
+
+    <div class="card">
+      <h3>Températures mensuelles <span>moyenne, maximale, minimale (°C)</span></h3>
+      <div class="body"><canvas id="chMonthlyTemp"></canvas></div>
+    </div>
+
+    <div class="card">
+      <h3>Précipitations mensuelles <span>cumul estimé (mm)</span></h3>
+      <div class="body"><canvas id="chRain"></canvas></div>
+    </div>
+
+    <div class="card">
+      <h3>Humidité et pression <span>moyennes mensuelles</span></h3>
+      <div class="body"><canvas id="chHumPress"></canvas></div>
+    </div>
+
+    <div class="card">
+      <h3>Rafales et indice UV <span>maximums mensuels</span></h3>
+      <div class="body"><canvas id="chGustUv"></canvas></div>
+    </div>
+
+    <div class="card wide">
+      <h3>Notes de lecture et qualité des données</h3>
+      <div class="body notes" style="height:auto">
+        <ul>
+          <li><span class="dot c"></span><span><b>Précipitations :</b> la colonne « Hourly Rain » est répétée sur les enregistrements d'une même heure (environ 7,5 relevés par heure). Les cumuls affichés sont des estimations : une valeur maximale unique est retenue par heure avant sommation.</span></li>
+          <li><span class="dot g"></span><span><b>Unités :</b> température en °C et pression en hPa (valeurs cohérentes). L'unité du vent n'est pas documentée dans la table : les rafales sont affichées en valeur brute station.</span></li>
+          <li><span class="dot r"></span><span><b>Anomalie connue :</b> les maximales absolues de température, de rafale et de pluie horaire 2026 portent le même horodatage (22/05/2026 05:45:51), ce qui suggère un enregistrement douteux à vérifier.</span></li>
+          <li><span class="dot c"></span><span><b>Sécurité :</b> la clé intégrée dans ce fichier est une clé <i>publiable</i> (lecture seule permise par la politique RLS « Enable read access for all users »). La clé secrète (service_role) n'est jamais embarquée. Ne jamais la placer dans un fichier client.</span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    Application locale générée le 23/10/2026 — charte graphique personnelle (Sora, palette bleu profond / cyan / magenta).
+  </footer>
+</div>
+
+<script>
+  // ------------------------------------------------------------------
+  // Configuration Supabase (lecture seule, clé publiable)
+  // ------------------------------------------------------------------
+  var CFG = {
+    url: "https://gvmogpbbcllkfqmryvwz.supabase.co",
+    key: "sb_publishable_F4IH5ndz17UAPgHC7ihdRg_LiZikjIb",
+    table: "MyMeteoData",
+    page: 1000 // limite par défaut de PostgREST sur Supabase
+  };
+
+  var COLS = encodeURIComponent(
+    '"DateTime","Temperature","Humidity","Baro Pressure","Wind Gust","UVI","Hourly Rain","Solar Radiation"'
+  );
+
+  var charts = [];
+  var lastDaily = [];
+
+  function setStatus(msg, isError) {
+    var el = document.getElementById("status");
+    el.textContent = msg;
+    el.className = "status" + (isError ? " error" : "");
+  }
+
+  function fmt(n, dec) {
+    if (n === null || n === undefined || isNaN(n)) return "—";
+    return n.toLocaleString("fr-FR", { minimumFractionDigits: dec, maximumFractionDigits: dec });
+  }
+
+  function isoDay(d) { return d.toISOString().slice(0, 10); }
+
+  // ------------------------------------------------------------------
+  // Récupération paginée des données via l'API REST (PostgREST)
+  // ------------------------------------------------------------------
+  function fetchRows(from, to) {
+    var all = [];
+    var offset = 0;
+    function page() {
+      var u = CFG.url + "/rest/v1/" + CFG.table +
+        "?select=" + COLS +
+        '&"DateTime"=gte.' + from +
+        (to ? '&"DateTime"=lt.' + to : "") +
+        '&order="DateTime".asc&limit=' + CFG.page + "&offset=" + offset;
+      return fetch(u, {
+        headers: {
+          "apikey": CFG.key,
+          "Authorization": "Bearer " + CFG.key
+        }
+      }).then(function (r) {
+        if (!r.ok) {
+          return r.text().then(function (t) {
+            throw new Error("Erreur HTTP " + r.status + " — " + t.slice(0, 180));
+          });
+        }
+        return r.json();
+      }).then(function (rows) {
+        all = all.concat(rows);
+        setStatus(fmt(all.length, 0) + " enregistrements chargés…");
+        if (rows.length < CFG.page) return all;
+        offset += CFG.page;
+        return page();
+      });
+    }
+    setStatus("Interrogation de la base Supabase…");
+    return page();
+  }
+
+  // ------------------------------------------------------------------
+  // Agrégation côté client (par jour et par mois)
+  // ------------------------------------------------------------------
+  function aggregate(rows) {
+    var days = {}, months = {}, hours = {};
+    var k = {
+      n: 0, tSum: 0, tMax: -Infinity, tMaxDt: null, tMin: Infinity, tMinDt: null,
+      gustMax: -Infinity, gustDt: null, uvMax: -Infinity, humSum: 0, rainHours: 0
+    };
+
+    function dayObj(key) {
+      if (!days[key]) days[key] = {
+        n: 0, tSum: 0, lo: Infinity, hi: -Infinity, humSum: 0,
+        gust: -1, gustDt: null, rain: 0
+      };
+      return days[key];
+    }
+    function monthObj(key) {
+      if (!months[key]) months[key] = {
+        n: 0, tSum: 0, lo: Infinity, hi: -Infinity, humSum: 0, pressSum: 0, pressN: 0,
+        gust: -1, uv: -1, windSum: 0, rain: 0
+      };
+      return months[key];
+    }
+
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      var dt = r["DateTime"];
+      if (!dt) continue;
+      var day = dt.slice(0, 10);
+      var month = dt.slice(0, 7);
+      var hour = dt.slice(0, 13);
+      var t = r["Temperature"];
+      var tVal = (t === null || t === undefined) ? null : Number(t);
+      var hum = r["Humidity"];
+      var gust = r["Wind Gust"];
+      var uv = r["UVI"];
+      var press = r["Baro Pressure"];
+
+      k.n++;
+      if (tVal !== null) {
+        k.tSum += tVal;
+        if (tVal > k.tMax) { k.tMax = tVal; k.tMaxDt = dt; }
+        if (tVal < k.tMin) { k.tMin = tVal; k.tMinDt = dt; }
+      }
+      if (hum !== null && hum !== undefined) k.humSum += Number(hum);
+      if (gust !== null && gust !== undefined && Number(gust) > k.gustMax) { k.gustMax = Number(gust); k.gustDt = dt; }
+      if (uv !== null && uv !== undefined) k.uvMax = Math.max(k.uvMax, Number(uv));
+
+      var d = dayObj(day);
+      d.n++;
+      if (tVal !== null) {
+        d.tSum += tVal;
+        if (tVal > d.hi) d.hi = tVal;
+        if (tVal < d.lo) d.lo = tVal;
+      }
+      if (hum !== null && hum !== undefined) d.humSum += Number(hum);
+      if (gust !== null && gust !== undefined) d.gust = Math.max(d.gust, Number(gust));
+
+      var m = monthObj(month);
+      m.n++;
+      if (tVal !== null) {
+        m.tSum += tVal;
+        if (tVal > m.hi) m.hi = tVal;
+        if (tVal < m.lo) m.lo = tVal;
+      }
+      if (hum !== null && hum !== undefined) m.humSum += Number(hum);
+      if (press !== null && press !== undefined) { m.pressSum += Number(press); m.pressN++; }
+      if (gust !== null && gust !== undefined) m.gust = Math.max(m.gust, Number(gust));
+      if (uv !== null && uv !== undefined) m.uv = Math.max(m.uv, Number(uv));
+
+      var hr = r["Hourly Rain"];
+      if (hr !== null && hr !== undefined) {
+        var hv = Number(hr);
+        if (!(hour in hours) || hv > hours[hour]) hours[hour] = hv;
+      }
+    }
+
+    // Déduplication horaire de la pluie, répartie par jour et par mois
+    for (var h in hours) {
+      var dk = h.slice(0, 10);
+      var mk = h.slice(0, 7);
+      dayObj(dk).rain += hours[h];
+      monthObj(mk).rain += hours[h];
+      k.rainHours++;
+    }
+
+    return { k: k, days: days, months: months };
+  }
+
+  // ------------------------------------------------------------------
+  // Rendu des indicateurs et graphiques
+  // ------------------------------------------------------------------
+  var MONTH_FR = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
+
+  function frDate(iso) {
+    if (!iso) return "—";
+    return iso.slice(8, 10) + "/" + iso.slice(5, 7) + "/" + iso.slice(0, 4);
+  }
+  function frDateTime(iso) {
+    if (!iso) return "—";
+    return frDate(iso) + " " + iso.slice(11, 16);
+  }
+  function monthLabel(key) {
+    return MONTH_FR[Number(key.slice(5, 7)) - 1] + " " + key.slice(2, 4);
+  }
+
+  function destroyCharts() {
+    charts.forEach(function (c) { c.destroy(); });
+    charts = [];
+  }
+
+  function renderKpis(agg, rows) {
+    var k = agg.k;
+    var items = [
+      { label: "Relevés chargés", value: fmt(k.n, 0), sub: rows.length ? "Du " + frDate(rows[0]["DateTime"]) + " au " + frDate(rows[rows.length - 1]["DateTime"]) : "—" },
+      { label: "Température moyenne", value: fmt(k.n ? k.tSum / k.n : null, 1), unit: "°C", sub: "Moyenne sur la période" },
+      { label: "Maximale absolue", value: fmt(k.tMax, 1), unit: "°C", sub: k.tMaxDt ? "Le " + frDateTime(k.tMaxDt) : "", cls: "red" },
+      { label: "Minimale absolue", value: fmt(k.tMin, 1), unit: "°C", sub: k.tMinDt ? "Le " + frDateTime(k.tMinDt) : "" },
+      { label: "Pluviométrie estimée", value: fmt(k.n ? k.rainHours ? aggRainTotal(agg) : 0 : null, 0), unit: "mm", sub: "Cumul estimé (dédup. horaire)" },
+      { label: "Rafale maximale", value: fmt(k.gustMax, 0), sub: k.gustDt ? "Le " + frDateTime(k.gustDt) : "", cls: "red" },
+      { label: "UV maximal", value: fmt(k.uvMax, 1), sub: "Indice UV", cls: "magenta" },
+      { label: "Humidité moyenne", value: fmt(k.n ? k.humSum / k.n : null, 0), unit: "%", sub: "Moyenne sur la période" }
+    ];
+    document.getElementById("kpis").innerHTML = items.map(function (it) {
+      return '<div class="kpi">' +
+        '<div class="label">' + it.label + '</div>' +
+        '<div class="value ' + (it.cls || "") + '">' + it.value +
+        (it.unit ? '<span class="unit">' + it.unit + '</span>' : '') +
+        '</div><div class="sub">' + (it.sub || "") + '</div></div>';
+    }).join("");
+  }
+
+  function aggRainTotal(agg) {
+    var tot = 0;
+    for (var mk in agg.months) tot += agg.months[mk].rain;
+    return tot;
+  }
+
+  function renderLatest(rows) {
+    if (!rows.length) { document.getElementById("latest").innerHTML = ""; return; }
+    var r = rows[rows.length - 1];
+    var items = [
+      ["Horodatage", frDateTime(r["DateTime"])],
+      ["Température", fmt(Number(r["Temperature"]), 1) + " °C"],
+      ["Humidité", fmt(Number(r["Humidity"]), 0) + " %"],
+      ["Pression", fmt(Number(r["Baro Pressure"]), 1) + " hPa"],
+      ["Rafale", fmt(Number(r["Wind Gust"]), 0)],
+      ["UV", fmt(Number(r["UVI"]), 1)],
+      ["Rayonnement", fmt(Number(r["Solar Radiation"]), 1) + " W/m²"]
+    ];
+    document.getElementById("latest").innerHTML = items.map(function (x) {
+      return '<div class="item"><div class="k">' + x[0] + '</div><div class="v">' + x[1] + '</div></div>';
+    }).join("");
+  }
+
+  function baseOpts(extra) {
+    var o = {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { labels: { font: { family: "Sora" }, color: "#33515E", boxWidth: 14 } },
+        tooltip: {
+          titleFont: { family: "Sora", weight: "700" },
+          bodyFont: { family: "Sora" },
+          backgroundColor: "#ffffff",
+          titleColor: "#003748",
+          bodyColor: "#003748",
+          borderColor: "#003748",
+          borderWidth: 1
+        }
+      },
+      scales: {
+        x: { ticks: { font: { family: "Sora", size: 11 }, color: "#33515E" }, grid: { display: false } },
+        y: { ticks: { font: { family: "Sora", size: 11 }, color: "#33515E" }, grid: { color: "rgba(0,55,72,0.10)" } }
+      }
+    };
+    for (var e in extra) o[e] = extra[e];
+    return o;
+  }
+
+  function renderCharts(agg) {
+    var C = { primary: "#003748", cyan: "#00DBDB", magenta: "#FF00D3", red: "#ED0036", gray: "#809BA3" };
+    Chart.defaults.font.family = "Sora";
+
+    // 1. Températures journalières
+    var dayKeys = Object.keys(agg.days).sort();
+    var daily = dayKeys.map(function (dk) {
+      var d = agg.days[dk];
+      return {
+        key: dk,
+        label: dk.slice(8, 10) + "/" + dk.slice(5, 7),
+        avg: d.n ? d.tSum / d.n : null,
+        hi: d.hi === -Infinity ? null : d.hi,
+        lo: d.lo === Infinity ? null : d.lo
+      };
+    });
+    lastDaily = daily.slice();
+    var stride = Math.max(1, Math.floor(daily.length / 40));
+    charts.push(new Chart(document.getElementById("chDaily"), {
+      type: "line",
+      data: {
+        labels: daily.map(function (x) { return x.label; }),
+        datasets: [
+          { label: "Max (°C)", data: daily.map(function (x) { return x.hi; }), borderColor: C.red, backgroundColor: C.red, borderWidth: 1.5, pointRadius: 0, tension: 0.25 },
+          { label: "Moyenne (°C)", data: daily.map(function (x) { return x.avg; }), borderColor: C.primary, backgroundColor: "rgba(0,219,219,0.35)", borderWidth: 2, pointRadius: 0, tension: 0.25, fill: true },
+          { label: "Min (°C)", data: daily.map(function (x) { return x.lo; }), borderColor: C.gray, backgroundColor: C.gray, borderWidth: 1.5, pointRadius: 0, tension: 0.25 }
+        ]
+      },
+      options: baseOpts({ scales: {
+        x: { ticks: { font: { family: "Sora", size: 10 }, color: "#33515E", maxTicksLimit: 24, autoSkip: true }, grid: { display: false } },
+        y: { ticks: { font: { family: "Sora", size: 11 }, color: "#33515E" }, grid: { color: "rgba(0,55,72,0.10)" } }
+      } })
+    }));
+
+    // 2. Températures mensuelles
+    var mKeys = Object.keys(agg.months).sort();
+    var mLbl = mKeys.map(monthLabel);
+    var mAvg = mKeys.map(function (k) { var m = agg.months[k]; return m.n ? +(m.tSum / m.n).toFixed(1) : null; });
+    var mHi = mKeys.map(function (k) { return agg.months[k].hi === -Infinity ? null : agg.months[k].hi; });
+    var mLo = mKeys.map(function (k) { return agg.months[k].lo === Infinity ? null : agg.months[k].lo; });
+    charts.push(new Chart(document.getElementById("chMonthlyTemp"), {
+      type: "bar",
+      data: {
+        labels: mLbl,
+        datasets: [
+          { label: "Moyenne (°C)", data: mAvg, backgroundColor: C.cyan, borderRadius: 6 },
+          { type: "line", label: "Maximale (°C)", data: mHi, borderColor: C.red, backgroundColor: C.red, borderWidth: 2, pointRadius: 3, tension: 0.3 },
+          { type: "line", label: "Minimale (°C)", data: mLo, borderColor: C.gray, backgroundColor: C.gray, borderWidth: 2, pointRadius: 3, tension: 0.3 }
+        ]
+      },
+      options: baseOpts({})
+    }));
+
+    // 3. Précipitations mensuelles
+    charts.push(new Chart(document.getElementById("chRain"), {
+      type: "bar",
+      data: {
+        labels: mLbl,
+        datasets: [{ label: "Pluie estimée (mm)", data: mKeys.map(function (k) { return +agg.months[k].rain.toFixed(1); }), backgroundColor: C.cyan, borderRadius: 6 }]
+      },
+      options: baseOpts({})
+    }));
+
+    // 4. Humidité + pression (double axe)
+    var mHum = mKeys.map(function (k) { var m = agg.months[k]; return m.n ? Math.round(m.humSum / m.n) : null; });
+    var mPress = mKeys.map(function (k) { var m = agg.months[k]; return m.pressN ? +(m.pressSum / m.pressN).toFixed(1) : null; });
+    charts.push(new Chart(document.getElementById("chHumPress"), {
+      type: "line",
+      data: {
+        labels: mLbl,
+        datasets: [
+          { label: "Humidité (%)", data: mHum, borderColor: C.magenta, backgroundColor: C.magenta, borderWidth: 2.5, pointRadius: 3, tension: 0.3, yAxisID: "y" },
+          { label: "Pression (hPa)", data: mPress, borderColor: C.gray, backgroundColor: C.gray, borderWidth: 2, pointRadius: 3, tension: 0.3, yAxisID: "y2" }
+        ]
+      },
+      options: baseOpts({ scales: {
+        x: { ticks: { font: { family: "Sora", size: 11 }, color: "#33515E" }, grid: { display: false } },
+        y: { min: 0, max: 100, ticks: { font: { family: "Sora", size: 11 }, color: "#33515E" }, grid: { color: "rgba(0,55,72,0.10)" } },
+        y2: { position: "right", grid: { drawOnChartArea: false }, ticks: { font: { family: "Sora", size: 11 }, color: "#33515E" } }
+      } })
+    }));
+
+    // 5. Rafales + UV (double axe)
+    charts.push(new Chart(document.getElementById("chGustUv"), {
+      type: "bar",
+      data: {
+        labels: mLbl,
+        datasets: [
+          { label: "Rafale max", data: mKeys.map(function (k) { return agg.months[k].gust === -1 ? null : agg.months[k].gust; }), backgroundColor: C.primary, borderRadius: 6, yAxisID: "y" },
+          { type: "line", label: "UV max", data: mKeys.map(function (k) { return agg.months[k].uv === -1 ? null : agg.months[k].uv; }), borderColor: C.magenta, backgroundColor: C.magenta, borderWidth: 2, pointRadius: 3, tension: 0.3, yAxisID: "y2" }
+        ]
+      },
+      options: baseOpts({ scales: {
+        x: { ticks: { font: { family: "Sora", size: 11 }, color: "#33515E" }, grid: { display: false } },
+        y: { beginAtZero: true, ticks: { font: { family: "Sora", size: 11 }, color: "#33515E" }, grid: { color: "rgba(0,55,72,0.10)" } },
+        y2: { position: "right", beginAtZero: true, grid: { drawOnChartArea: false }, ticks: { font: { family: "Sora", size: 11 }, color: "#33515E" } }
+      } })
+    }));
+  }
+
+  // ------------------------------------------------------------------
+  // Export CSV des agrégats journaliers
+  // ------------------------------------------------------------------
+  function exportCsv() {
+    if (!lastDaily.length) { setStatus("Aucune donnée chargée : cliquez d'abord sur Actualiser.", true); return; }
+    var lines = ["Jour;Moyenne (°C);Max (°C);Min (°C)"];
+    lastDaily.forEach(function (d) {
+      lines.push(frDate(d.key) + ";" +
+        (d.avg !== null ? d.avg.toString().replace(".", ",") : "") + ";" +
+        (d.hi !== null ? d.hi.toString().replace(".", ",") : "") + ";" +
+        (d.lo !== null ? d.lo.toString().replace(".", ",") : ""));
+    });
+    var blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "meteo_journalier.csv";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  // ------------------------------------------------------------------
+  // Chargement principal
+  // ------------------------------------------------------------------
+  function periodRange(value) {
+    var today = new Date();
+    function yStart(y) { return y + "-01-01"; }
+    switch (value) {
+      case "y2026": return { from: yStart("2026"), to: yStart("2027") };
+      case "y2025": return { from: yStart("2025"), to: yStart("2026") };
+      case "y2024": return { from: yStart("2024"), to: yStart("2025") };
+      case "d30": { var d = new Date(today.getTime() - 29 * 86400000); return { from: isoDay(d), to: null }; }
+      case "d90": { var d2 = new Date(today.getTime() - 89 * 86400000); return { from: isoDay(d2), to: null }; }
+      case "m12": { var d3 = new Date(today.getTime() - 365 * 86400000); return { from: isoDay(d3), to: null }; }
+      case "all": return { from: "2023-01-01", to: null };
+      default: return { from: yStart("2026"), to: yStart("2027") };
+    }
+  }
+
+  function load() {
+    var btn = document.getElementById("refresh");
+    btn.disabled = true;
+    destroyCharts();
+    var range = periodRange(document.getElementById("period").value);
+    fetchRows(range.from, range.to).then(function (rows) {
+      if (!rows.length) {
+        setStatus("Aucun enregistrement sur cette période.", true);
+        btn.disabled = false;
+        return;
+      }
+      var agg = aggregate(rows);
+      renderKpis(agg, rows);
+      renderLatest(rows);
+      renderCharts(agg);
+      setStatus("Terminé — " + fmt(rows.length, 0) + " relevés, du " + frDate(rows[0]["DateTime"]) + " au " + frDate(rows[rows.length - 1]["DateTime"]) + ".");
+      btn.disabled = false;
+    }).catch(function (err) {
+      setStatus("Échec : " + err.message + " — vérifiez votre connexion Internet.", true);
+      btn.disabled = false;
+    });
+  }
+
+  load();
+</script>
+<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/vce701823e78c4301a35b7e07294d87301792088814092" integrity="sha512-UKNk8GbxkABxKcXYuLkO16EleLGUkcvJWtpSNmExE0Too3ZaFAxTscNWEc1OdAv5/BikHawapSCaiD2XCmp+Bw==" nonce="weT6BjRmdY899q6W8m6+MQ==" data-cf-beacon='{"version":"2024.11.0","token":"36b4216ae2dc4d5488c249161e71fe1e","spa":2}' crossorigin="anonymous"></script>
+</body>
+</html>
