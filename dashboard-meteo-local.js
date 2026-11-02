@@ -13,7 +13,6 @@
   );
 
   var charts = {};
-  var lastDaily = [];
 
   var VIEW_CHARTS = {
     daily: ["chDailyTemp", "chDailyRain", "chDailyPress", "chDailyGust"],
@@ -72,7 +71,13 @@
   // ------------------------------------------------------------------
   // Agrégation côté client (par jour et par mois)
   // ------------------------------------------------------------------
-  function aggregate(rows) {
+  // Cadence attendue : 1 relevé / 5 min (288/jour), sauf du 19/04/2026 au 01/11/2026 : 1 / 15 min (96/jour)
+  function expectedPerDay(dayIso) {
+    if (dayIso >= "2026-04-19" && dayIso < "2026-11-01") return 96;
+    return 288;
+  }
+
+  function aggregate(rows, from, to) {
     var days = {}, months = {}, hours = {};
     var k = {
       n: 0, tSum: 0, tMax: -Infinity, tMaxDt: null, tMin: Infinity, tMinDt: null,
@@ -167,7 +172,20 @@
       k.rainHours++;
     }
 
-    return { k: k, days: days, months: months };
+    // Somme des relevés attendus par mois sur la plage demandée (mois partiels inclus)
+    var expMonths = {};
+    if (from) {
+      var d0 = new Date(from + "T00:00:00Z");
+      var end = to ? new Date(to + "T00:00:00Z") : new Date(Date.UTC(2100, 0, 1));
+      while (d0 < end) {
+        var iso = isoDay(d0);
+        var mk = iso.slice(0, 7);
+        expMonths[mk] = (expMonths[mk] || 0) + expectedPerDay(iso);
+        d0.setUTCDate(d0.getUTCDate() + 1);
+      }
+    }
+
+    return { k: k, days: days, months: months, expMonths: expMonths };
   }
 
   // ------------------------------------------------------------------
@@ -194,8 +212,11 @@
 
   function renderKpis(agg, rows) {
     var k = agg.k;
+    var expTot = 0;
+    for (var ek in agg.expMonths) expTot += agg.expMonths[ek];
     var items = [
       { label: "Relevés chargés", value: fmt(k.n, 0), sub: rows.length ? "Du " + frDate(rows[0]["DateTime"]) + " au " + frDate(rows[rows.length - 1]["DateTime"]) : "—" },
+      { label: "Fiabilité moyenne", value: expTot ? fmt(Math.round(100 * k.n / expTot), 0) : "—", unit: "%", sub: "reçus / attendus (288/j, ou 96/j du 19/04 au 01/11/2026)" },
       { label: "Température moyenne", value: fmt(k.n ? k.tSum / k.n : null, 1), unit: "°C", sub: "Moyenne sur la période" },
       { label: "Maximale absolue", value: fmt(k.tMax, 1), unit: "°C", sub: k.tMaxDt ? "Le " + frDateTime(k.tMaxDt) : "", cls: "red" },
       { label: "Minimale absolue", value: fmt(k.tMin, 1), unit: "°C", sub: k.tMinDt ? "Le " + frDateTime(k.tMinDt) : "" },
@@ -258,8 +279,23 @@
         y: { ticks: { font: { family: "Sora", size: 11 }, color: "#33515E" }, grid: { color: "rgba(0,55,72,0.10)" } }
       }
     };
+    if (extra.scales) {
+      for (var s in extra.scales) o.scales[s] = extra.scales[s];
+      delete extra.scales;
+    }
     for (var e in extra) o[e] = extra[e];
     return o;
+  }
+
+  // Axe secondaire + dataset "fiabilité" (partagés par tous les graphes)
+  function relAxis() {
+    return { position: "right", beginAtZero: true, grid: { drawOnChartArea: false },
+      ticks: { font: { family: "Sora", size: 10 }, color: "#809BA3", callback: function (v) { return v + " %"; } } };
+  }
+  function relDataset(data) {
+    return { type: "line", label: "Fiabilité (%)", data: data, yAxisID: "y2",
+      borderColor: "#809BA3", backgroundColor: "#809BA3",
+      borderWidth: 1.5, borderDash: [4, 4], pointRadius: 0, pointHoverRadius: 3, tension: 0.2, fill: false };
   }
 
   function renderCharts(agg) {
@@ -280,18 +316,20 @@
         pAvg: d.pressN ? +(d.pressSum / d.pressN).toFixed(1) : null,
         pHi: d.pressHi === -Infinity ? null : d.pressHi,
         pLo: d.pressLo === Infinity ? null : d.pressLo,
-        gust: d.gust === -1 ? null : d.gust
+        gust: d.gust === -1 ? null : d.gust,
+        rel: Math.round(100 * d.n / expectedPerDay(dk))
       };
     });
-    lastDaily = daily.slice();
     var xLbl = daily.map(function (x) { return x.label; });
     var xDaily = { scales: {
       x: { ticks: { font: { family: "Sora", size: 10 }, color: "#33515E", maxTicksLimit: 24, autoSkip: true }, grid: { display: false } },
-      y: { ticks: { font: { family: "Sora", size: 11 }, color: "#33515E" }, grid: { color: "rgba(0,55,72,0.10)" } }
+      y: { ticks: { font: { family: "Sora", size: 11 }, color: "#33515E" }, grid: { color: "rgba(0,55,72,0.10)" } },
+      y2: relAxis()
     } };
     var xDailyZero = { scales: {
       x: { ticks: { font: { family: "Sora", size: 10 }, color: "#33515E", maxTicksLimit: 24, autoSkip: true }, grid: { display: false } },
-      y: { beginAtZero: true, ticks: { font: { family: "Sora", size: 11 }, color: "#33515E" }, grid: { color: "rgba(0,55,72,0.10)" } }
+      y: { beginAtZero: true, ticks: { font: { family: "Sora", size: 11 }, color: "#33515E" }, grid: { color: "rgba(0,55,72,0.10)" } },
+      y2: relAxis()
     } };
 
     // Vue journalière — 4 cartes pleine largeur
@@ -302,7 +340,8 @@
         datasets: [
           { label: "Max (°C)", data: daily.map(function (x) { return x.tHi; }), borderColor: C.red, backgroundColor: C.red, borderWidth: 1.5, pointRadius: 0, tension: 0.25 },
           { label: "Moyenne (°C)", data: daily.map(function (x) { return x.tAvg; }), borderColor: C.primary, backgroundColor: "rgba(0,219,219,0.35)", borderWidth: 2, pointRadius: 0, tension: 0.25, fill: true },
-          { label: "Min (°C)", data: daily.map(function (x) { return x.tLo; }), borderColor: C.gray, backgroundColor: C.gray, borderWidth: 1.5, pointRadius: 0, tension: 0.25 }
+          { label: "Min (°C)", data: daily.map(function (x) { return x.tLo; }), borderColor: C.gray, backgroundColor: C.gray, borderWidth: 1.5, pointRadius: 0, tension: 0.25 },
+          relDataset(daily.map(function (x) { return x.rel; }))
         ]
       },
       options: baseOpts(xDaily)
@@ -312,7 +351,10 @@
       type: "bar",
       data: {
         labels: xLbl,
-        datasets: [{ label: "Pluie estimée (mm)", data: daily.map(function (x) { return x.rain; }), backgroundColor: C.cyan, borderRadius: 4 }]
+        datasets: [
+          { label: "Pluie estimée (mm)", data: daily.map(function (x) { return x.rain; }), backgroundColor: C.cyan, borderRadius: 4 },
+          relDataset(daily.map(function (x) { return x.rel; }))
+        ]
       },
       options: baseOpts(xDailyZero)
     });
@@ -324,7 +366,8 @@
         datasets: [
           { label: "Max (hPa)", data: daily.map(function (x) { return x.pHi; }), borderColor: C.red, backgroundColor: C.red, borderWidth: 1.5, pointRadius: 0, tension: 0.25 },
           { label: "Moyenne (hPa)", data: daily.map(function (x) { return x.pAvg; }), borderColor: C.primary, backgroundColor: "rgba(0,219,219,0.35)", borderWidth: 2, pointRadius: 0, tension: 0.25, fill: true },
-          { label: "Min (hPa)", data: daily.map(function (x) { return x.pLo; }), borderColor: C.gray, backgroundColor: C.gray, borderWidth: 1.5, pointRadius: 0, tension: 0.25 }
+          { label: "Min (hPa)", data: daily.map(function (x) { return x.pLo; }), borderColor: C.gray, backgroundColor: C.gray, borderWidth: 1.5, pointRadius: 0, tension: 0.25 },
+          relDataset(daily.map(function (x) { return x.rel; }))
         ]
       },
       options: baseOpts(xDaily)
@@ -334,7 +377,10 @@
       type: "bar",
       data: {
         labels: xLbl,
-        datasets: [{ label: "Rafale max", data: daily.map(function (x) { return x.gust; }), backgroundColor: C.primary, borderRadius: 4 }]
+        datasets: [
+          { label: "Rafale max", data: daily.map(function (x) { return x.gust; }), backgroundColor: C.primary, borderRadius: 4 },
+          relDataset(daily.map(function (x) { return x.rel; }))
+        ]
       },
       options: baseOpts(xDailyZero)
     });
@@ -348,6 +394,10 @@
     var mRain = mKeys.map(function (k) { return +agg.months[k].rain.toFixed(1); });
     var mPress = mKeys.map(function (k) { var m = agg.months[k]; return m.pressN ? +(m.pressSum / m.pressN).toFixed(1) : null; });
     var mGust = mKeys.map(function (k) { return agg.months[k].gust === -1 ? null : agg.months[k].gust; });
+    var mRel = mKeys.map(function (k) {
+      var exp = agg.expMonths ? agg.expMonths[k] : null;
+      return exp ? Math.round(100 * agg.months[k].n / exp) : null;
+    });
 
     // Vue mensuelle — 4 cartes en barres
     charts["chMonthlyTemp"] = new Chart(document.getElementById("chMonthlyTemp"), {
@@ -357,30 +407,38 @@
         datasets: [
           { label: "Moyenne (°C)", data: mAvg, backgroundColor: C.cyan, borderRadius: 6 },
           { type: "line", label: "Maximale (°C)", data: mHi, borderColor: C.red, backgroundColor: C.red, borderWidth: 2, pointRadius: 3, tension: 0.3 },
-          { type: "line", label: "Minimale (°C)", data: mLo, borderColor: C.gray, backgroundColor: C.gray, borderWidth: 2, pointRadius: 3, tension: 0.3 }
+          { type: "line", label: "Minimale (°C)", data: mLo, borderColor: C.gray, backgroundColor: C.gray, borderWidth: 2, pointRadius: 3, tension: 0.3 },
+          relDataset(mRel)
         ]
       },
-      options: baseOpts({})
+      options: baseOpts({ scales: { y2: relAxis() } })
     });
 
     charts["chMonthlyRain"] = new Chart(document.getElementById("chMonthlyRain"), {
       type: "bar",
       data: {
         labels: mLbl,
-        datasets: [{ label: "Pluie estimée (mm)", data: mRain, backgroundColor: C.cyan, borderRadius: 6 }]
+        datasets: [
+          { label: "Pluie estimée (mm)", data: mRain, backgroundColor: C.cyan, borderRadius: 6 },
+          relDataset(mRel)
+        ]
       },
-      options: baseOpts({})
+      options: baseOpts({ scales: { y2: relAxis() } })
     });
 
     charts["chMonthlyPress"] = new Chart(document.getElementById("chMonthlyPress"), {
       type: "bar",
       data: {
         labels: mLbl,
-        datasets: [{ label: "Pression moyenne (hPa)", data: mPress, backgroundColor: C.gray, borderRadius: 6 }]
+        datasets: [
+          { label: "Pression moyenne (hPa)", data: mPress, backgroundColor: C.gray, borderRadius: 6 },
+          relDataset(mRel)
+        ]
       },
       options: baseOpts({ scales: {
         x: { ticks: { font: { family: "Sora", size: 11 }, color: "#33515E" }, grid: { display: false } },
-        y: { beginAtZero: false, ticks: { font: { family: "Sora", size: 11 }, color: "#33515E" }, grid: { color: "rgba(0,55,72,0.10)" } }
+        y: { beginAtZero: false, ticks: { font: { family: "Sora", size: 11 }, color: "#33515E" }, grid: { color: "rgba(0,55,72,0.10)" } },
+        y2: relAxis()
       } })
     });
 
@@ -388,9 +446,12 @@
       type: "bar",
       data: {
         labels: mLbl,
-        datasets: [{ label: "Rafale max", data: mGust, backgroundColor: C.primary, borderRadius: 6 }]
+        datasets: [
+          { label: "Rafale max", data: mGust, backgroundColor: C.primary, borderRadius: 6 },
+          relDataset(mRel)
+        ]
       },
-      options: baseOpts({})
+      options: baseOpts({ scales: { y2: relAxis() } })
     });
   }
 
@@ -404,35 +465,17 @@
   }
 
   // ------------------------------------------------------------------
-  // Export CSV des agrégats journaliers
-  // ------------------------------------------------------------------
-  function exportCsv() {
-    if (!lastDaily.length) { setStatus("Aucune donnée chargée : cliquez d'abord sur Actualiser.", true); return; }
-    var lines = ["Jour;Temp moy (°C);Temp max (°C);Temp min (°C);Pluie (mm);Pression moy (hPa);Rafale max"];
-    lastDaily.forEach(function (d) {
-      lines.push(frDate(d.key) + ";" +
-        (d.tAvg !== null ? d.tAvg.toString().replace(".", ",") : "") + ";" +
-        (d.tHi !== null ? d.tHi.toString().replace(".", ",") : "") + ";" +
-        (d.tLo !== null ? d.tLo.toString().replace(".", ",") : "") + ";" +
-        (d.rain !== null ? d.rain.toString().replace(".", ",") : "") + ";" +
-        (d.pAvg !== null ? d.pAvg.toString().replace(".", ",") : "") + ";" +
-        (d.gust !== null ? d.gust.toString().replace(".", ",") : ""));
-    });
-    var blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
-    var a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "meteo_journalier.csv";
-    a.click();
-    URL.revokeObjectURL(a.href);
-  }
-
-  // ------------------------------------------------------------------
   // Chargement principal
   // ------------------------------------------------------------------
   function nextDay(iso) {
     var d = new Date(iso + "T00:00:00Z");
     d.setUTCDate(d.getUTCDate() + 1);
     return d.toISOString().slice(0, 10);
+  }
+
+  function onPeriodChange() {
+    toggleCustomDates();
+    if (document.getElementById("period").value !== "custom") load();
   }
 
   function toggleCustomDates() {
@@ -529,6 +572,7 @@
     var btn = document.getElementById("refresh");
     btn.disabled = true;
     destroyCharts();
+    var range;
     refreshYearOptions().then(function () {
       var p = document.getElementById("period").value;
       if (p === "custom") {
@@ -537,7 +581,7 @@
         if (!from) { setStatus("Sélectionnez une date de début.", true); btn.disabled = false; return false; }
         if (to && from > to) { setStatus("La date de début doit être antérieure ou égale à la date de fin.", true); btn.disabled = false; return false; }
       }
-      var range = periodRange(p);
+      range = periodRange(p);
       return fetchRows(range.from, range.to);
     }).then(function (rows) {
       if (rows === false) return;
@@ -546,7 +590,7 @@
         btn.disabled = false;
         return;
       }
-      var agg = aggregate(rows);
+      var agg = aggregate(rows, range ? range.from : null, range ? range.to : null);
       renderKpis(agg, rows);
       renderLatest(rows);
       renderCharts(agg);
@@ -615,7 +659,7 @@
     nStatus("Chargement de l'année " + y + "…");
     fetchRows(y + "-01-01", (y + 1) + "-01-01").then(function (rows) {
       normLoaded[key] = true;
-      var agg = aggregate(rows);
+      var agg = aggregate(rows, y + "-01-01", (y + 1) + "-01-01");
       renderNormale(key, y, agg);
       nStatus("Année " + y + " — " + fmt(rows.length, 0) + " relevés. Normales : " + NORMALES[key].source + ".");
     }).catch(function (err) {
@@ -632,12 +676,13 @@
     });
 
     var labels = MONTH_FR.slice();
-    var stMoy = [], stRain = [];
+    var stMoy = [], stRain = [], stRel = [];
     for (var m = 1; m <= 12; m++) {
       var mk = y + "-" + (m < 10 ? "0" + m : "" + m);
       var mo = agg.months[mk];
       stMoy.push(mo && mo.n ? +(mo.tSum / mo.n).toFixed(1) : null);
       stRain.push(mo ? +mo.rain.toFixed(1) : 0);
+      stRel.push(mo && agg.expMonths && agg.expMonths[mk] ? Math.round(100 * mo.n / agg.expMonths[mk]) : null);
     }
 
     charts["chNormTemp-" + key] = new Chart(document.getElementById("chNormTemp-" + key), {
@@ -648,10 +693,11 @@
           { label: "Ma station — moy. mensuelle (°C)", data: stMoy, backgroundColor: C.cyan, borderRadius: 6 },
           { type: "line", label: "Normale max (°C)", data: N.tempMax, borderColor: C.red, backgroundColor: C.red, borderWidth: 2, pointRadius: 3, tension: 0.3 },
           { type: "line", label: "Normale moy (°C)", data: N.tempMoy, borderColor: C.primary, backgroundColor: C.primary, borderWidth: 2, pointRadius: 3, tension: 0.3 },
-          { type: "line", label: "Normale min (°C)", data: N.tempMin, borderColor: C.gray, backgroundColor: C.gray, borderWidth: 2, pointRadius: 3, tension: 0.3 }
+          { type: "line", label: "Normale min (°C)", data: N.tempMin, borderColor: C.gray, backgroundColor: C.gray, borderWidth: 2, pointRadius: 3, tension: 0.3 },
+          relDataset(stRel)
         ]
       },
-      options: baseOpts({})
+      options: baseOpts({ scales: { y2: relAxis() } })
     });
 
     charts["chNormRain-" + key] = new Chart(document.getElementById("chNormRain-" + key), {
@@ -660,10 +706,11 @@
         labels: labels,
         datasets: [
           { label: "Ma station — cumul mensuel (mm)", data: stRain, backgroundColor: C.cyan, borderRadius: 6 },
-          { type: "line", label: "Normale cumul moyen (mm)", data: N.rainMoy, borderColor: C.magenta, backgroundColor: C.magenta, borderWidth: 2, pointRadius: 3, tension: 0.3, borderDash: [6, 4] }
+          { type: "line", label: "Normale cumul moyen (mm)", data: N.rainMoy, borderColor: C.magenta, backgroundColor: C.magenta, borderWidth: 2, pointRadius: 3, tension: 0.3, borderDash: [6, 4] },
+          relDataset(stRel)
         ]
       },
-      options: baseOpts({})
+      options: baseOpts({ scales: { y2: relAxis() } })
     });
   }
 

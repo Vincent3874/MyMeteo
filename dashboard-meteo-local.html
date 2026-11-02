@@ -23,7 +23,7 @@
   <div id="page-dash" class="tabPage">
   <div class="controls">
     <label for="period">Période :</label>
-    <select id="period" onchange="toggleCustomDates()">
+    <select id="period" onchange="onPeriodChange()">
       <option value="y2026" selected>2026</option>
       <option value="y2025">2025</option>
       <option value="y2024">2024</option>
@@ -45,7 +45,6 @@
       <option value="monthly">Mensuelle</option>
     </select>
     <button id="refresh" class="primary" onclick="load()">Actualiser</button>
-    <button id="export" class="secondary" onclick="exportCsv()">Export CSV journalier</button>
     <div id="status" class="status">Prêt. Choisissez une période puis cliquez sur Actualiser.</div>
   </div>
 
