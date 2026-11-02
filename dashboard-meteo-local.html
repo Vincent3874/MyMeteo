@@ -18,6 +18,7 @@
     <button class="tab active" onclick="switchTab('dash')">Dashboard</button>
     <button class="tab" onclick="switchTab('smh')">Normales — Saint-Martin-d'Hères</button>
     <button class="tab" onclick="switchTab('gre')">Normales — Grenoble-St Geoirs</button>
+    <button class="tab" onclick="switchTab('ana')">Analyse annuelle</button>
   </div>
 
   <div id="page-dash" class="tabPage">
@@ -135,6 +136,19 @@
       <div class="card wide">
         <h3>Précipitations mensuelles vs normales — Grenoble-St Geoirs <span>cumul estimé (mm)</span></h3>
         <div class="body"><canvas id="chNormRain-gre"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="page-ana" class="tabPage" hidden>
+    <div class="controls">
+      <button id="refreshAna" class="primary" onclick="loadAnalyse(true)">Actualiser</button>
+      <div id="status-ana" class="status">Le tableau comparatif se charge à l'ouverture de l'onglet.</div>
+    </div>
+    <div class="charts">
+      <div class="card wide">
+        <h3>Analyse annuelle <span>indicateurs calculés année par année — records min/max de chaque indicateur mis en évidence</span></h3>
+        <div class="body table-body" id="anaTableWrap"></div>
       </div>
     </div>
   </div>

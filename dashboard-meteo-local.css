@@ -115,6 +115,40 @@ button:disabled { opacity: 0.55; cursor: wait; transform: none; }
 .tabPage[hidden] { display: none; }
 footer { margin-top: 24px; font-size: 11px; color: var(--gray); text-align: center; }
 
+/* --- Onglet Analyse : tableau comparatif annuel --- */
+.card .body.table-body { height: auto; overflow-x: auto; }
+.ana-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 780px; }
+.ana-table th, .ana-table td {
+  padding: 10px 14px; text-align: right; white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+}
+.ana-table thead th {
+  background: linear-gradient(135deg, var(--primary), #0a5a73); color: #fff;
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700;
+}
+.ana-table thead th:first-child, .ana-table td.year { text-align: left; }
+.ana-table tbody tr:nth-child(even) { background: #f5fafb; }
+.ana-table tbody tr:hover { background: var(--light2); }
+.ana-table td.year { font-weight: 700; color: var(--primary); }
+.ana-table td.hl-max {
+  background: rgba(255, 0, 211, 0.13); color: var(--magenta); font-weight: 700;
+  box-shadow: inset 0 0 0 1.5px rgba(255, 0, 211, 0.45);
+}
+.ana-table td.hl-min {
+  background: rgba(0, 219, 219, 0.15); color: var(--primary); font-weight: 700;
+  box-shadow: inset 0 0 0 1.5px rgba(0, 219, 219, 0.5);
+}
+.ana-legend {
+  display: flex; flex-wrap: wrap; gap: 6px 20px;
+  margin-top: 14px; font-size: 11.5px; color: var(--text); opacity: 0.9;
+}
+.ana-legend .sw {
+  display: inline-block; width: 11px; height: 11px; border-radius: 3px;
+  margin-right: 6px; vertical-align: -1px;
+}
+.ana-legend .sw.max { background: rgba(255, 0, 211, 0.3); box-shadow: inset 0 0 0 1px rgba(255, 0, 211, 0.55); }
+.ana-legend .sw.min { background: rgba(0, 219, 219, 0.3); box-shadow: inset 0 0 0 1px rgba(0, 219, 219, 0.6); }
+
 /* --- Adaptation mobile --- */
 @media (max-width: 720px) {
   body { padding: 20px 10px; }
@@ -136,5 +170,9 @@ footer { margin-top: 24px; font-size: 11px; color: var(--gray); text-align: cent
   .latest .item .v { font-size: 15px; }
   .tabs { gap: 6px; margin-bottom: 14px; }
   .tab { flex: 1 1 auto; text-align: center; padding: 8px 10px; font-size: 12px; }
+  .card .body.table-body { padding: 10px; }
+  .ana-table { font-size: 12px; min-width: 660px; }
+  .ana-table th, .ana-table td { padding: 8px 10px; }
+  .ana-legend { font-size: 10.5px; gap: 4px 14px; }
   footer { font-size: 10px; margin-top: 18px; }
 }

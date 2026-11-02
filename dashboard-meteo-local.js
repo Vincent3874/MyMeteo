@@ -35,9 +35,10 @@
   // ------------------------------------------------------------------
   // Récupération paginée des données via l'API REST (PostgREST)
   // ------------------------------------------------------------------
-  function fetchRows(from, to) {
+  function fetchRows(from, to, statusFn) {
     var all = [];
     var offset = 0;
+    var say = statusFn || setStatus;
     function page() {
       var u = CFG.url + "/rest/v1/" + CFG.table +
         "?select=" + COLS +
@@ -58,13 +59,13 @@
         return r.json();
       }).then(function (rows) {
         all = all.concat(rows);
-        setStatus(fmt(all.length, 0) + " enregistrements chargés…");
+        say(fmt(all.length, 0) + " enregistrements chargés…");
         if (rows.length < CFG.page) return all;
         offset += CFG.page;
         return page();
       });
     }
-    setStatus("Interrogation de la base Supabase…");
+    say("Interrogation de la base Supabase…");
     return page();
   }
 
@@ -75,6 +76,18 @@
   function expectedPerDay(dayIso) {
     if (dayIso >= "2026-04-19" && dayIso < "2026-11-01") return 96;
     return 288;
+  }
+
+  // Attendu pour un jour donné : journée complète, sauf pour aujourd'hui où
+  // seuls les créneaux déjà écoulés (UTC) sont comptés ; 0 pour un jour futur.
+  function expectedForDay(dayIso, now) {
+    var perDay = expectedPerDay(dayIso);
+    var todayIso = isoDay(now);
+    if (dayIso < todayIso) return perDay;
+    if (dayIso > todayIso) return 0;
+    var step = perDay === 96 ? 15 : 5;
+    var slots = Math.floor((now.getUTCHours() * 60 + now.getUTCMinutes()) / step) + 1;
+    return Math.min(perDay, slots);
   }
 
   function aggregate(rows, from, to) {
@@ -172,15 +185,20 @@
       k.rainHours++;
     }
 
-    // Somme des relevés attendus par mois sur la plage demandée (mois partiels inclus)
+    // Somme des relevés attendus par mois sur la plage demandée (mois partiels inclus).
+    // On s'arrête à aujourd'hui : les jours futurs ne sont pas attendus et le jour
+    // en cours est compté au prorata des créneaux déjà écoulés.
     var expMonths = {};
     if (from) {
+      var nowRef = new Date();
+      var todayIso = isoDay(nowRef);
       var d0 = new Date(from + "T00:00:00Z");
       var end = to ? new Date(to + "T00:00:00Z") : new Date(Date.UTC(2100, 0, 1));
       while (d0 < end) {
         var iso = isoDay(d0);
+        if (iso > todayIso) break;
         var mk = iso.slice(0, 7);
-        expMonths[mk] = (expMonths[mk] || 0) + expectedPerDay(iso);
+        expMonths[mk] = (expMonths[mk] || 0) + expectedForDay(iso, nowRef);
         d0.setUTCDate(d0.getUTCDate() + 1);
       }
     }
@@ -216,7 +234,7 @@
     for (var ek in agg.expMonths) expTot += agg.expMonths[ek];
     var items = [
       { label: "Relevés chargés", value: fmt(k.n, 0), sub: rows.length ? "Du " + frDate(rows[0]["DateTime"]) + " au " + frDate(rows[rows.length - 1]["DateTime"]) : "—" },
-      { label: "Fiabilité moyenne", value: expTot ? fmt(Math.round(100 * k.n / expTot), 0) : "—", unit: "%", sub: "reçus / attendus (288/j, ou 96/j du 19/04 au 01/11/2026)" },
+      { label: "Fiabilité moyenne", value: expTot ? fmt(Math.round(100 * k.n / expTot), 0) : "—", unit: "%", sub: "reçus / attendus (288/j, 96/j du 19/04 au 01/11/2026 ; période en cours proratisée jusqu'à maintenant)" },
       { label: "Température moyenne", value: fmt(k.n ? k.tSum / k.n : null, 1), unit: "°C", sub: "Moyenne sur la période" },
       { label: "Maximale absolue", value: fmt(k.tMax, 1), unit: "°C", sub: k.tMaxDt ? "Le " + frDateTime(k.tMaxDt) : "", cls: "red" },
       { label: "Minimale absolue", value: fmt(k.tMin, 1), unit: "°C", sub: k.tMinDt ? "Le " + frDateTime(k.tMinDt) : "" },
@@ -249,8 +267,7 @@
       ["Humidité", fmt(Number(r["Humidity"]), 0) + " %"],
       ["Pression", fmt(Number(r["Baro Pressure"]), 1) + " hPa"],
       ["Rafale", fmt(Number(r["Wind Gust"]), 0)],
-      ["UV", fmt(Number(r["UVI"]), 1)],
-      ["Rayonnement", fmt(Number(r["Solar Radiation"]), 1) + " W/m²"]
+      ["UV", fmt(Number(r["UVI"]), 1)]
     ];
     document.getElementById("latest").innerHTML = items.map(function (x) {
       return '<div class="item"><div class="k">' + x[0] + '</div><div class="v">' + x[1] + '</div></div>';
@@ -317,7 +334,7 @@
         pHi: d.pressHi === -Infinity ? null : d.pressHi,
         pLo: d.pressLo === Infinity ? null : d.pressLo,
         gust: d.gust === -1 ? null : d.gust,
-        rel: Math.round(100 * d.n / expectedPerDay(dk))
+        rel: Math.round(100 * d.n / Math.max(1, expectedForDay(dk, new Date())))
       };
     });
     var xLbl = daily.map(function (x) { return x.label; });
@@ -609,7 +626,7 @@
   var normLoaded = { smh: false, gre: false };
 
   function switchTab(key) {
-    var pages = { dash: "page-dash", smh: "page-smh", gre: "page-gre" };
+    var pages = { dash: "page-dash", smh: "page-smh", gre: "page-gre", ana: "page-ana" };
     for (var k in pages) {
       if (pages[k]) document.getElementById(pages[k]).hidden = (k !== key);
     }
@@ -621,6 +638,8 @@
       (VIEW_CHARTS.daily.concat(VIEW_CHARTS.monthly)).forEach(function (id) {
         if (charts[id]) charts[id].resize();
       });
+    } else if (key === "ana") {
+      if (!anaLoaded) loadAnalyse(false);
     } else {
       ["chNormTemp-" + key, "chNormRain-" + key].forEach(function (id) {
         if (charts[id]) charts[id].resize();
@@ -711,6 +730,124 @@
         ]
       },
       options: baseOpts({ scales: { y2: relAxis() } })
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Onglet "Analyse" : tableau comparatif par année
+  // ------------------------------------------------------------------
+  var anaLoaded = false;
+
+  var ANA_COLS = [
+    { key: "rel",   label: "Fiabilité",          dec: 0, noHl: true },
+    { key: "hot",   label: "Jours Tmax > 35 °C", dec: 0 },
+    { key: "frost", label: "Jours Tmin < 0 °C",  dec: 0 },
+    { key: "tMin",  label: "Tmin absolue (°C)",  dec: 1 },
+    { key: "tMax",  label: "Tmax absolue (°C)",  dec: 1 }
+  ];
+
+  function computeYearStats(year, rows) {
+    var agg = aggregate(rows, year + "-01-01", (year + 1) + "-01-01");
+    var expTot = 0;
+    for (var ek in agg.expMonths) expTot += agg.expMonths[ek];
+    var hot = 0, frost = 0, tMin = Infinity, tMax = -Infinity;
+    for (var dk in agg.days) {
+      var d = agg.days[dk];
+      if (d.hi > 35) hot++;
+      if (d.lo < 0) frost++;
+      if (d.lo < tMin) tMin = d.lo;
+      if (d.hi > tMax) tMax = d.hi;
+    }
+    return {
+      year: year,
+      rel: expTot ? Math.round(100 * agg.k.n / expTot) : null,
+      hot: hot,
+      frost: frost,
+      tMin: tMin === Infinity ? null : tMin,
+      tMax: tMax === -Infinity ? null : tMax
+    };
+  }
+
+  function renderAnalyse(stats) {
+    stats.sort(function (a, b) { return a.year - b.year; });
+    // Records min/max de chaque indicateur sur l'ensemble des années
+    var ext = {};
+    ANA_COLS.forEach(function (c) {
+      if (c.noHl) { ext[c.key] = null; return; }
+      var vals = [];
+      stats.forEach(function (s) {
+        var v = s[c.key];
+        if (v !== null && v !== undefined && !isNaN(v)) vals.push(v);
+      });
+      if (!vals.length) { ext[c.key] = null; return; }
+      var mn = Math.min.apply(null, vals);
+      var mx = Math.max.apply(null, vals);
+      ext[c.key] = (mn === mx) ? null : { min: mn, max: mx };
+    });
+
+    var html = '<table class="ana-table"><thead><tr><th>Année</th>';
+    ANA_COLS.forEach(function (c) { html += "<th>" + c.label + "</th>"; });
+    html += "</tr></thead><tbody>";
+    stats.forEach(function (s) {
+      html += '<tr><td class="year">' + s.year + "</td>";
+      ANA_COLS.forEach(function (c) {
+        var v = s[c.key];
+        var cls = "";
+        var e = ext[c.key];
+        if (e && v !== null && v !== undefined && !isNaN(v)) {
+          if (v === e.max) cls = "hl-max";
+          else if (v === e.min) cls = "hl-min";
+        }
+        html += '<td' + (cls ? ' class="' + cls + '"' : "") + ">" + fmt(v, c.dec) + "</td>";
+      });
+      html += "</tr>";
+    });
+    html += "</tbody></table>";
+    html += '<div class="ana-legend">' +
+      '<span><span class="sw max"></span>record max de l\'indicateur sur les années</span>' +
+      '<span><span class="sw min"></span>record min de l\'indicateur sur les années</span>' +
+      "<span>Fiabilité = relevés reçus / attendus (288/j, 96/j du 19/04 au 01/11/2026 ; période en cours proratisée jusqu'à maintenant)</span>" +
+      "</div>";
+    document.getElementById("anaTableWrap").innerHTML = html;
+  }
+
+  function loadAnalyse(force) {
+    if (anaLoaded && !force) return;
+    var st = document.getElementById("status-ana");
+    var btn = document.getElementById("refreshAna");
+    function aStatus(msg, isErr) {
+      if (!st) return;
+      st.textContent = msg;
+      st.className = "status" + (isErr ? " error" : "");
+    }
+    if (btn) btn.disabled = true;
+    aStatus("Détermination des années disponibles…");
+    Promise.all([fetchOneDateTime("asc"), fetchOneDateTime("desc")]).then(function (b) {
+      if (!b[0] || !b[1]) throw new Error("Impossible de déterminer la plage de dates de la station.");
+      var yMin = Number(b[0].slice(0, 4));
+      var yMax = Number(b[1].slice(0, 4));
+      var years = [];
+      for (var y = yMin; y <= yMax; y++) years.push(y);
+      var done = 0;
+      aStatus("Chargement de l'analyse… 0/" + years.length + " années");
+      return Promise.all(years.map(function (y) {
+        return fetchRows(y + "-01-01", (y + 1) + "-01-01", function () {}).then(function (rows) {
+          done++;
+          aStatus("Chargement de l'analyse… " + done + "/" + years.length + " années");
+          return { year: y, rows: rows };
+        });
+      }));
+    }).then(function (res) {
+      var stats = res.map(function (r) { return computeYearStats(r.year, r.rows); });
+      renderAnalyse(stats);
+      anaLoaded = true;
+      var first = stats.length ? stats[0].year : "—";
+      var last = stats.length ? stats[stats.length - 1].year : "—";
+      aStatus("Analyse terminée — " + stats.length + " année(s), de " + first + " à " + last + ".");
+      if (btn) btn.disabled = false;
+    }).catch(function (err) {
+      aStatus("Échec : " + err.message + " — vérifiez votre connexion Internet.", true);
+      if (btn) btn.disabled = false;
     });
   }
 
