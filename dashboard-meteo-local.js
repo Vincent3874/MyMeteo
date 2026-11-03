@@ -232,12 +232,20 @@
     var k = agg.k;
     var expTot = 0;
     for (var ek in agg.expMonths) expTot += agg.expMonths[ek];
+    var hotDays = 0, frostDays = 0;
+    for (var dk in agg.days) {
+      var d = agg.days[dk];
+      if (d.hi > 35) hotDays++;
+      if (d.lo < 0) frostDays++;
+    }
     var items = [
       { label: "Relevés chargés", value: fmt(k.n, 0), sub: rows.length ? "Du " + frDate(rows[0]["DateTime"]) + " au " + frDate(rows[rows.length - 1]["DateTime"]) : "—" },
-      { label: "Fiabilité moyenne", value: expTot ? fmt(Math.round(100 * k.n / expTot), 0) : "—", unit: "%", sub: "reçus / attendus (288/j, 96/j du 19/04 au 01/11/2026 ; période en cours proratisée jusqu'à maintenant)" },
+      { label: "Fiabilité moyenne", value: expTot ? fmt(Math.round(100 * k.n / expTot), 0) : "—", unit: "%", sub: "reçus / attendus" },
       { label: "Température moyenne", value: fmt(k.n ? k.tSum / k.n : null, 1), unit: "°C", sub: "Moyenne sur la période" },
       { label: "Maximale absolue", value: fmt(k.tMax, 1), unit: "°C", sub: k.tMaxDt ? "Le " + frDateTime(k.tMaxDt) : "", cls: "red" },
       { label: "Minimale absolue", value: fmt(k.tMin, 1), unit: "°C", sub: k.tMinDt ? "Le " + frDateTime(k.tMinDt) : "" },
+      { label: "Jours Tmax > 35 °C", value: fmt(hotDays, 0), sub: "Jours de forte chaleur sur la période", cls: "red" },
+      { label: "Jours Tmin < 0 °C", value: fmt(frostDays, 0), sub: "Jours de gel sur la période" },
       { label: "Pluviométrie estimée", value: fmt(k.n ? k.rainHours ? aggRainTotal(agg) : 0 : null, 0), unit: "mm", sub: "Cumul estimé (dédup. horaire)" },
       { label: "Rafale maximale", value: fmt(k.gustMax, 0), sub: k.gustDt ? "Le " + frDateTime(k.gustDt) : "", cls: "red" },
       { label: "UV maximal", value: fmt(k.uvMax, 1), sub: "Indice UV", cls: "magenta" },
@@ -530,6 +538,7 @@
     var prev = sel.value;
     return Promise.all([fetchOneDateTime("asc"), fetchOneDateTime("desc")]).then(function (b) {
       if (!b[0] || !b[1]) return;
+      if (Number(b[0].slice(0, 4)) < 2024) b[0] = "2024-01-01"; // années complètes uniquement
       var yMin = Number(b[0].slice(0, 4));
       var yMax = Number(b[1].slice(0, 4));
       for (var i = sel.options.length - 1; i >= 0; i--) {
@@ -575,7 +584,7 @@
       case "d30": { var d = new Date(today.getTime() - 29 * 86400000); return { from: isoDay(d), to: null }; }
       case "d90": { var d2 = new Date(today.getTime() - 89 * 86400000); return { from: isoDay(d2), to: null }; }
       case "m12": { var d3 = new Date(today.getTime() - 365 * 86400000); return { from: isoDay(d3), to: null }; }
-      case "all": return { from: "2023-01-01", to: null };
+      case "all": return { from: "2024-01-01", to: null };
       case "custom": {
         var from = document.getElementById("dateFrom").value;
         var to = document.getElementById("dateTo").value;
@@ -742,6 +751,7 @@
     { key: "rel",   label: "Fiabilité",          dec: 0, noHl: true },
     { key: "hot",   label: "Jours Tmax > 35 °C", dec: 0 },
     { key: "frost", label: "Jours Tmin < 0 °C",  dec: 0 },
+    { key: "tMoy",  label: "Tmoy (°C)",          dec: 1 },
     { key: "tMin",  label: "Tmin absolue (°C)",  dec: 1 },
     { key: "tMax",  label: "Tmax absolue (°C)",  dec: 1 }
   ];
@@ -763,6 +773,7 @@
       rel: expTot ? Math.round(100 * agg.k.n / expTot) : null,
       hot: hot,
       frost: frost,
+      tMoy: agg.k.n ? +(agg.k.tSum / agg.k.n).toFixed(1) : null,
       tMin: tMin === Infinity ? null : tMin,
       tMax: tMax === -Infinity ? null : tMax
     };
@@ -824,6 +835,7 @@
     aStatus("Détermination des années disponibles…");
     Promise.all([fetchOneDateTime("asc"), fetchOneDateTime("desc")]).then(function (b) {
       if (!b[0] || !b[1]) throw new Error("Impossible de déterminer la plage de dates de la station.");
+      if (Number(b[0].slice(0, 4)) < 2024) b[0] = "2024-01-01"; // années complètes uniquement
       var yMin = Number(b[0].slice(0, 4));
       var yMax = Number(b[1].slice(0, 4));
       var years = [];
