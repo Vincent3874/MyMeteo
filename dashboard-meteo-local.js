@@ -12,6 +12,12 @@
     '"DateTime","Temperature","Humidity","Baro Pressure","Wind Gust","UVI","Hourly Rain","Solar Radiation"'
   );
 
+  // Table des indicateurs journaliers pré-calculés (mise à jour à 1h pour la veille)
+  var IND_TABLE = "DailyIndicators";
+  var IND_COLS = encodeURIComponent(
+    'id,date,temp_min,temp_avg,temp_max,rain_total,humidity_avg,pressure_avg,wind_gust_max,uv_index_max,reliability,temp_count,record_count'
+  );
+
   var charts = {};
 
   var VIEW_CHARTS = {
@@ -70,6 +76,61 @@
   }
 
   // ------------------------------------------------------------------
+  // Récupération paginée des indicateurs journaliers pré-calculés
+  // (DailyIndicators — 1 ligne par jour, mise à jour à 1h pour la veille)
+  // ------------------------------------------------------------------
+  function fetchIndicators(from, to, statusFn) {
+    var all = [];
+    var offset = 0;
+    var say = statusFn || setStatus;
+    function page() {
+      var u = CFG.url + "/rest/v1/" + IND_TABLE +
+        "?select=" + IND_COLS +
+        (from ? "&date=gte." + from : "") +
+        (to ? "&date=lt." + to : "") +
+        "&order=date.asc&limit=" + CFG.page + "&offset=" + offset;
+      return fetch(u, {
+        headers: {
+          "apikey": CFG.key,
+          "Authorization": "Bearer " + CFG.key
+        }
+      }).then(function (r) {
+        if (!r.ok) {
+          return r.text().then(function (t) {
+            throw new Error("Erreur HTTP " + r.status + " — " + t.slice(0, 180));
+          });
+        }
+        return r.json();
+      }).then(function (rows) {
+        all = all.concat(rows);
+        say(fmt(all.length, 0) + " jours d'indicateurs chargés…");
+        if (rows.length < CFG.page) return all;
+        offset += CFG.page;
+        return page();
+      });
+    }
+    say("Interrogation de " + IND_TABLE + "…");
+    return page();
+  }
+
+  // Dernier relevé disponible (toujours en temps réel depuis MyMeteoData)
+  function fetchLatestRow() {
+    var u = CFG.url + "/rest/v1/" + CFG.table +
+      "?select=" + COLS + '&order="DateTime".desc&limit=1';
+    return fetch(u, {
+      headers: {
+        "apikey": CFG.key,
+        "Authorization": "Bearer " + CFG.key
+      }
+    }).then(function (r) {
+      if (!r.ok) throw new Error("Erreur HTTP " + r.status);
+      return r.json();
+    }).then(function (rows) {
+      return rows.length ? rows[0] : null;
+    });
+  }
+
+  // ------------------------------------------------------------------
   // Agrégation côté client (par jour et par mois)
   // ------------------------------------------------------------------
   // Cadence attendue : 1 relevé / 5 min (288/jour), sauf du 19/04/2026 au 01/11/2026 : 1 / 15 min (96/jour)
@@ -101,7 +162,7 @@
       if (!days[key]) days[key] = {
         n: 0, tSum: 0, lo: Infinity, hi: -Infinity, humSum: 0,
         gust: -1, gustDt: null, rain: 0,
-        pressSum: 0, pressN: 0, pressHi: -Infinity, pressLo: Infinity
+        pressSum: 0, pressN: 0
       };
       return days[key];
     }
@@ -147,11 +208,8 @@
       if (hum !== null && hum !== undefined) d.humSum += Number(hum);
       if (gust !== null && gust !== undefined) d.gust = Math.max(d.gust, Number(gust));
       if (press !== null && press !== undefined) {
-        var pv = Number(press);
-        d.pressSum += pv;
+        d.pressSum += Number(press);
         d.pressN++;
-        if (pv > d.pressHi) d.pressHi = pv;
-        if (pv < d.pressLo) d.pressLo = pv;
       }
 
       var m = monthObj(month);
@@ -185,25 +243,156 @@
       k.rainHours++;
     }
 
-    // Somme des relevés attendus par mois sur la plage demandée (mois partiels inclus).
-    // On s'arrête à aujourd'hui : les jours futurs ne sont pas attendus et le jour
-    // en cours est compté au prorata des créneaux déjà écoulés.
+    return { k: k, days: days, months: months, expMonths: computeExpMonths(from, to) };
+  }
+
+  // Somme des relevés attendus par mois sur la plage demandée (mois partiels inclus).
+  // On s'arrête à aujourd'hui : les jours futurs ne sont pas attendus et le jour
+  // en cours est compté au prorata des créneaux déjà écoulés.
+  function computeExpMonths(from, to) {
     var expMonths = {};
-    if (from) {
-      var nowRef = new Date();
-      var todayIso = isoDay(nowRef);
-      var d0 = new Date(from + "T00:00:00Z");
-      var end = to ? new Date(to + "T00:00:00Z") : new Date(Date.UTC(2100, 0, 1));
-      while (d0 < end) {
-        var iso = isoDay(d0);
-        if (iso > todayIso) break;
-        var mk = iso.slice(0, 7);
-        expMonths[mk] = (expMonths[mk] || 0) + expectedForDay(iso, nowRef);
-        d0.setUTCDate(d0.getUTCDate() + 1);
+    if (!from) return expMonths;
+    var nowRef = new Date();
+    var todayIso = isoDay(nowRef);
+    var d0 = new Date(from + "T00:00:00Z");
+    var end = to ? new Date(to + "T00:00:00Z") : new Date(Date.UTC(2100, 0, 1));
+    while (d0 < end) {
+      var iso = isoDay(d0);
+      if (iso > todayIso) break;
+      var mk = iso.slice(0, 7);
+      expMonths[mk] = (expMonths[mk] || 0) + expectedForDay(iso, nowRef);
+      d0.setUTCDate(d0.getUTCDate() + 1);
+    }
+    return expMonths;
+  }
+
+  // ------------------------------------------------------------------
+  // Construction des agrégats depuis DailyIndicators (1 ligne/jour),
+  // complétée par les relevés bruts du jour en cours (rawRows).
+  // Produit la même structure que aggregate().
+  // ------------------------------------------------------------------
+  function buildAgg(indRows, rawRows, from, to) {
+    var days = {}, months = {};
+    var k = {
+      n: 0, tSum: 0, tCount: 0, tMax: -Infinity, tMaxDt: null, tMin: Infinity, tMinDt: null,
+      gustMax: -Infinity, gustDt: null, uvMax: -Infinity, humSum: 0, rainHours: 0
+    };
+
+    function dayObj(key) {
+      if (!days[key]) days[key] = {
+        n: 0, tSum: 0, lo: Infinity, hi: -Infinity, humSum: 0,
+        gust: -1, gustDt: null, rain: 0, rel: null,
+        pressSum: 0, pressN: 0
+      };
+      return days[key];
+    }
+    function monthObj(key) {
+      if (!months[key]) months[key] = {
+        n: 0, tSum: 0, lo: Infinity, hi: -Infinity, humSum: 0, pressSum: 0, pressN: 0,
+        gust: -1, uv: -1, windSum: 0, rain: 0
+      };
+      return months[key];
+    }
+
+    // --- 1. Indicateurs journaliers pré-calculés ---
+    for (var i = 0; i < indRows.length; i++) {
+      var r = indRows[i];
+      var day = r.date;               // "YYYY-MM-DD"
+      if (!day) continue;
+      var month = day.slice(0, 7);
+      var n = Number(r.record_count) || 0;
+      var tc = Number(r.temp_count) || 0;
+      var tAvg = (r.temp_avg === null || r.temp_avg === undefined) ? null : Number(r.temp_avg);
+      var tMin = (r.temp_min === null || r.temp_min === undefined) ? null : Number(r.temp_min);
+      var tMax = (r.temp_max === null || r.temp_max === undefined) ? null : Number(r.temp_max);
+      var hum = (r.humidity_avg === null || r.humidity_avg === undefined) ? null : Number(r.humidity_avg);
+      var press = (r.pressure_avg === null || r.pressure_avg === undefined) ? null : Number(r.pressure_avg);
+      var gust = (r.wind_gust_max === null || r.wind_gust_max === undefined) ? null : Number(r.wind_gust_max);
+      var uv = (r.uv_index_max === null || r.uv_index_max === undefined) ? null : Number(r.uv_index_max);
+      var rain = (r.rain_total === null || r.rain_total === undefined) ? 0 : Number(r.rain_total);
+      var rel = (r.reliability === null || r.reliability === undefined)
+        ? Math.round(100 * n / Math.max(1, expectedForDay(day, new Date())))
+        : Math.round(Number(r.reliability) * 100);
+
+      k.n += n;
+      if (tAvg !== null && tc) {
+        k.tSum += tAvg * tc;
+        k.tCount += tc;
+        if (tMax !== null && tMax > k.tMax) { k.tMax = tMax; k.tMaxDt = day; }
+        if (tMin !== null && tMin < k.tMin) { k.tMin = tMin; k.tMinDt = day; }
+      }
+      if (hum !== null) k.humSum += hum * n;
+      if (gust !== null && gust > k.gustMax) { k.gustMax = gust; k.gustDt = day; }
+      if (uv !== null) k.uvMax = Math.max(k.uvMax, uv);
+      if (rain > 0) k.rainHours++;
+
+      var d = dayObj(day);
+      d.n += n;
+      d.rel = rel;
+      if (tAvg !== null && tc) {
+        d.tSum += tAvg * tc;
+        if (tMax !== null && tMax > d.hi) d.hi = tMax;
+        if (tMin !== null && tMin < d.lo) d.lo = tMin;
+      }
+      if (hum !== null) d.humSum += hum * n;
+      if (gust !== null && gust > d.gust) d.gust = gust;
+      d.rain += rain;
+      if (press !== null) { d.pressSum += press * n; d.pressN += n; }
+
+      var m = monthObj(month);
+      m.n += n;
+      if (tAvg !== null && tc) {
+        m.tSum += tAvg * tc;
+        if (tMax !== null && tMax > m.hi) m.hi = tMax;
+        if (tMin !== null && tMin < m.lo) m.lo = tMin;
+      }
+      if (hum !== null) m.humSum += hum * n;
+      if (press !== null) { m.pressSum += press * n; m.pressN += n; }
+      if (gust !== null && gust > m.gust) m.gust = gust;
+      if (uv !== null && uv > m.uv) m.uv = uv;
+      m.rain += rain;
+    }
+
+    // --- 2. Complément : relevés bruts du jour en cours (agrégés localement) ---
+    if (rawRows && rawRows.length) {
+      var extra = aggregate(rawRows, from, to);
+      k.n += extra.k.n;
+      k.tSum += extra.k.tSum;
+      k.tCount += extra.k.n;
+      if (extra.k.tMax > k.tMax) { k.tMax = extra.k.tMax; k.tMaxDt = extra.k.tMaxDt; }
+      if (extra.k.tMin < k.tMin) { k.tMin = extra.k.tMin; k.tMinDt = extra.k.tMinDt; }
+      if (extra.k.gustMax > k.gustMax) { k.gustMax = extra.k.gustMax; k.gustDt = extra.k.gustDt; }
+      k.uvMax = Math.max(k.uvMax, extra.k.uvMax);
+      k.humSum += extra.k.humSum;
+      k.rainHours += extra.k.rainHours;
+      for (var dk in extra.days) {
+        var ed = extra.days[dk];
+        var bd = dayObj(dk);
+        bd.n += ed.n;
+        bd.tSum += ed.tSum;
+        if (ed.hi > bd.hi) bd.hi = ed.hi;
+        if (ed.lo < bd.lo) bd.lo = ed.lo;
+        bd.humSum += ed.humSum;
+        if (ed.gust > bd.gust) { bd.gust = ed.gust; bd.gustDt = ed.gustDt; }
+        if (bd.rel === null) bd.rel = Math.round(100 * bd.n / Math.max(1, expectedForDay(dk, new Date())));
+        bd.rain += ed.rain;
+        bd.pressSum += ed.pressSum; bd.pressN += ed.pressN;
+      }
+      for (var mk in extra.months) {
+        var em = extra.months[mk];
+        var bm = monthObj(mk);
+        bm.n += em.n; bm.tSum += em.tSum;
+        if (em.hi > bm.hi) bm.hi = em.hi;
+        if (em.lo < bm.lo) bm.lo = em.lo;
+        bm.humSum += em.humSum;
+        bm.pressSum += em.pressSum; bm.pressN += em.pressN;
+        if (em.gust > bm.gust) bm.gust = em.gust;
+        if (em.uv > bm.uv) bm.uv = em.uv;
+        bm.rain += em.rain;
       }
     }
 
-    return { k: k, days: days, months: months, expMonths: expMonths };
+    return { k: k, days: days, months: months, expMonths: computeExpMonths(from, to) };
   }
 
   // ------------------------------------------------------------------
@@ -228,7 +417,7 @@
     charts = {};
   }
 
-  function renderKpis(agg, rows) {
+  function renderKpis(agg, meta) {
     var k = agg.k;
     var expTot = 0;
     for (var ek in agg.expMonths) expTot += agg.expMonths[ek];
@@ -238,16 +427,18 @@
       if (d.hi > 35) hotDays++;
       if (d.lo < 0) frostDays++;
     }
+    // Date du jour du max/min (DailyIndicators ne stocke pas l'heure exacte)
+    function dayOf(iso) { return iso ? frDate(String(iso).slice(0, 10)) : ""; }
     var items = [
-      { label: "Relevés chargés", value: fmt(k.n, 0), sub: rows.length ? "Du " + frDate(rows[0]["DateTime"]) + " au " + frDate(rows[rows.length - 1]["DateTime"]) : "—" },
+      { label: "Relevés chargés", value: fmt(k.n, 0), sub: (meta && meta.first) ? "Du " + frDate(meta.first) + " au " + frDate(meta.last) : "—" },
       { label: "Fiabilité moyenne", value: expTot ? fmt(Math.round(100 * k.n / expTot), 0) : "—", unit: "%", sub: "reçus / attendus" },
-      { label: "Température moyenne", value: fmt(k.n ? k.tSum / k.n : null, 1), unit: "°C", sub: "Moyenne sur la période" },
-      { label: "Maximale absolue", value: fmt(k.tMax, 1), unit: "°C", sub: k.tMaxDt ? "Le " + frDateTime(k.tMaxDt) : "", cls: "red" },
-      { label: "Minimale absolue", value: fmt(k.tMin, 1), unit: "°C", sub: k.tMinDt ? "Le " + frDateTime(k.tMinDt) : "" },
+      { label: "Température moyenne", value: fmt(k.tCount ? k.tSum / k.tCount : null, 1), unit: "°C", sub: "Moyenne sur la période" },
+      { label: "Maximale absolue", value: fmt(k.tMax, 1), unit: "°C", sub: k.tMaxDt ? "Le " + dayOf(k.tMaxDt) : "", cls: "red" },
+      { label: "Minimale absolue", value: fmt(k.tMin, 1), unit: "°C", sub: k.tMinDt ? "Le " + dayOf(k.tMinDt) : "" },
       { label: "Jours Tmax > 35 °C", value: fmt(hotDays, 0), sub: "Jours de forte chaleur sur la période", cls: "red" },
       { label: "Jours Tmin < 0 °C", value: fmt(frostDays, 0), sub: "Jours de gel sur la période" },
       { label: "Pluviométrie estimée", value: fmt(k.n ? k.rainHours ? aggRainTotal(agg) : 0 : null, 0), unit: "mm", sub: "Cumul estimé (dédup. horaire)" },
-      { label: "Rafale maximale", value: fmt(k.gustMax, 0), sub: k.gustDt ? "Le " + frDateTime(k.gustDt) : "", cls: "red" },
+      { label: "Rafale maximale", value: fmt(k.gustMax, 0), sub: k.gustDt ? "Le " + dayOf(k.gustDt) : "", cls: "red" },
       { label: "UV maximal", value: fmt(k.uvMax, 1), sub: "Indice UV", cls: "magenta" },
       { label: "Humidité moyenne", value: fmt(k.n ? k.humSum / k.n : null, 0), unit: "%", sub: "Moyenne sur la période" }
     ];
@@ -339,10 +530,10 @@
         tLo: d.lo === Infinity ? null : d.lo,
         rain: +d.rain.toFixed(1),
         pAvg: d.pressN ? +(d.pressSum / d.pressN).toFixed(1) : null,
-        pHi: d.pressHi === -Infinity ? null : d.pressHi,
-        pLo: d.pressLo === Infinity ? null : d.pressLo,
         gust: d.gust === -1 ? null : d.gust,
-        rel: Math.round(100 * d.n / Math.max(1, expectedForDay(dk, new Date())))
+        rel: (d.rel !== null && d.rel !== undefined)
+          ? d.rel
+          : Math.round(100 * d.n / Math.max(1, expectedForDay(dk, new Date())))
       };
     });
     var xLbl = daily.map(function (x) { return x.label; });
@@ -389,9 +580,7 @@
       data: {
         labels: xLbl,
         datasets: [
-          { label: "Max (hPa)", data: daily.map(function (x) { return x.pHi; }), borderColor: C.red, backgroundColor: C.red, borderWidth: 1.5, pointRadius: 0, tension: 0.25 },
           { label: "Moyenne (hPa)", data: daily.map(function (x) { return x.pAvg; }), borderColor: C.primary, backgroundColor: "rgba(0,219,219,0.35)", borderWidth: 2, pointRadius: 0, tension: 0.25, fill: true },
-          { label: "Min (hPa)", data: daily.map(function (x) { return x.pLo; }), borderColor: C.gray, backgroundColor: C.gray, borderWidth: 1.5, pointRadius: 0, tension: 0.25 },
           relDataset(daily.map(function (x) { return x.rel; }))
         ]
       },
@@ -608,20 +797,38 @@
         if (to && from > to) { setStatus("La date de début doit être antérieure ou égale à la date de fin.", true); btn.disabled = false; return false; }
       }
       range = periodRange(p);
-      return fetchRows(range.from, range.to);
-    }).then(function (rows) {
-      if (rows === false) return;
-      if (!rows.length) {
+      // Split de la plage :
+      //  - historique (jusqu'à hier inclus)  -> DailyIndicators (pré-calculé)
+      //  - jour en cours (et éventuel futur)   -> MyMeteoData brut (léger, ~288 lignes max)
+      var today = isoDay(new Date());
+      var indFrom = range.from < today ? range.from : null;
+      var indTo = range.to ? (range.to <= today ? range.to : today) : today;
+      var rawFrom = range.from > today ? range.from : today;
+      var hasRaw = range.to === null || rawFrom < range.to;
+      var pInd = indFrom ? fetchIndicators(indFrom, indTo) : Promise.resolve([]);
+      var pRaw = hasRaw ? fetchRows(rawFrom, range.to, function () {}) : Promise.resolve([]);
+      var pLatest = fetchLatestRow();
+      return Promise.all([pInd, pRaw, pLatest]);
+    }).then(function (res) {
+      if (res === false) return;
+      var indRows = res[0], rawRows = res[1], latest = res[2];
+      if (!indRows.length && !rawRows.length) {
         setStatus("Aucun enregistrement sur cette période.", true);
         btn.disabled = false;
         return;
       }
-      var agg = aggregate(rows, range ? range.from : null, range ? range.to : null);
-      renderKpis(agg, rows);
-      renderLatest(rows);
+      var agg = buildAgg(indRows, rawRows, range.from, range.to);
+      var dayKeys = Object.keys(agg.days).sort();
+      var meta = {
+        first: dayKeys.length ? dayKeys[0] : (latest ? String(latest["DateTime"]).slice(0, 10) : null),
+        last: dayKeys.length ? dayKeys[dayKeys.length - 1] : (latest ? String(latest["DateTime"]).slice(0, 10) : null)
+      };
+      renderKpis(agg, meta);
+      renderLatest(latest ? [latest] : rawRows);
       renderCharts(agg);
       toggleView();
-      setStatus("Terminé — " + fmt(rows.length, 0) + " relevés, du " + frDate(rows[0]["DateTime"]) + " au " + frDate(rows[rows.length - 1]["DateTime"]) + ".");
+      setStatus("Terminé — " + fmt(agg.k.n, 0) + " relevés, du " +
+        (meta.first ? frDate(meta.first) : "—") + " au " + (meta.last ? frDate(meta.last) : "—") + ".");
       btn.disabled = false;
     }).catch(function (err) {
       setStatus("Échec : " + err.message + " — vérifiez votre connexion Internet.", true);
@@ -684,12 +891,20 @@
     function nStatus(msg, isErr) { st.textContent = msg; st.className = "status" + (isErr ? " error" : ""); }
     if (!sel.value) { nStatus("Aucune année disponible.", true); return; }
     var y = Number(sel.value.slice(1));
+    var yearStart = y + "-01-01", yearEnd = (y + 1) + "-01-01";
     nStatus("Chargement de l'année " + y + "…");
-    fetchRows(y + "-01-01", (y + 1) + "-01-01").then(function (rows) {
+    var today = isoDay(new Date());
+    var indFrom = yearStart < today ? yearStart : null;
+    var indTo = yearEnd <= today ? yearEnd : today;
+    var rawFrom = yearStart > today ? yearStart : today;
+    var hasRaw = rawFrom < yearEnd;
+    var pInd = indFrom ? fetchIndicators(indFrom, indTo, nStatus) : Promise.resolve([]);
+    var pRaw = hasRaw ? fetchRows(rawFrom, yearEnd, function () {}) : Promise.resolve([]);
+    Promise.all([pInd, pRaw]).then(function (res) {
       normLoaded[key] = true;
-      var agg = aggregate(rows, y + "-01-01", (y + 1) + "-01-01");
+      var agg = buildAgg(res[0], res[1], yearStart, yearEnd);
       renderNormale(key, y, agg);
-      nStatus("Année " + y + " — " + fmt(rows.length, 0) + " relevés. Normales : " + NORMALES[key].source + ".");
+      nStatus("Année " + y + " — " + fmt(agg.k.n, 0) + " relevés. Normales : " + NORMALES[key].source + ".");
     }).catch(function (err) {
       nStatus("Échec : " + err.message + " — vérifiez votre connexion Internet.", true);
     });
@@ -756,8 +971,7 @@
     { key: "tMax",  label: "Tmax absolue (°C)",  dec: 1 }
   ];
 
-  function computeYearStats(year, rows) {
-    var agg = aggregate(rows, year + "-01-01", (year + 1) + "-01-01");
+  function computeYearStatsFromAgg(year, agg) {
     var expTot = 0;
     for (var ek in agg.expMonths) expTot += agg.expMonths[ek];
     var hot = 0, frost = 0, tMin = Infinity, tMax = -Infinity;
@@ -773,7 +987,7 @@
       rel: expTot ? Math.round(100 * agg.k.n / expTot) : null,
       hot: hot,
       frost: frost,
-      tMoy: agg.k.n ? +(agg.k.tSum / agg.k.n).toFixed(1) : null,
+      tMoy: agg.k.tCount ? +(agg.k.tSum / agg.k.tCount).toFixed(1) : null,
       tMin: tMin === Infinity ? null : tMin,
       tMax: tMax === -Infinity ? null : tMax
     };
@@ -833,6 +1047,7 @@
     }
     if (btn) btn.disabled = true;
     aStatus("Détermination des années disponibles…");
+    var today = isoDay(new Date());
     Promise.all([fetchOneDateTime("asc"), fetchOneDateTime("desc")]).then(function (b) {
       if (!b[0] || !b[1]) throw new Error("Impossible de déterminer la plage de dates de la station.");
       if (Number(b[0].slice(0, 4)) < 2024) b[0] = "2024-01-01"; // années complètes uniquement
@@ -843,14 +1058,21 @@
       var done = 0;
       aStatus("Chargement de l'analyse… 0/" + years.length + " années");
       return Promise.all(years.map(function (y) {
-        return fetchRows(y + "-01-01", (y + 1) + "-01-01", function () {}).then(function (rows) {
+        var yearStart = y + "-01-01", yearEnd = (y + 1) + "-01-01";
+        var indFrom = yearStart < today ? yearStart : null;
+        var indTo = yearEnd <= today ? yearEnd : today;
+        var rawFrom = yearStart > today ? yearStart : today;
+        var hasRaw = rawFrom < yearEnd;
+        var pInd = indFrom ? fetchIndicators(indFrom, indTo, function () {}) : Promise.resolve([]);
+        var pRaw = hasRaw ? fetchRows(rawFrom, yearEnd, function () {}) : Promise.resolve([]);
+        return Promise.all([pInd, pRaw]).then(function (res) {
           done++;
           aStatus("Chargement de l'analyse… " + done + "/" + years.length + " années");
-          return { year: y, rows: rows };
+          return { year: y, agg: buildAgg(res[0], res[1], yearStart, yearEnd) };
         });
       }));
     }).then(function (res) {
-      var stats = res.map(function (r) { return computeYearStats(r.year, r.rows); });
+      var stats = res.map(function (r) { return computeYearStatsFromAgg(r.year, r.agg); });
       renderAnalyse(stats);
       anaLoaded = true;
       var first = stats.length ? stats[0].year : "—";
