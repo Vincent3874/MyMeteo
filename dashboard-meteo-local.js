@@ -151,8 +151,47 @@
     return Math.min(perDay, slots);
   }
 
+  // Cumul journalier des précipitations à partir des relevés bruts MyMeteoData.
+  // "Hourly Rain" = compteur cumulatif remis à zéro à chaque heure pleine.
+  // Règle : pluie de l'heure X = MAX(échantillon Xh55, échantillon (X+1)h00).
+  // DateTime tronqué à la minute (neutralise d'éventuelles secondes).
+  function computeRainByDay(rows) {
+    var rainMap = {};
+    var daySet = {};
+    for (var i = 0; i < rows.length; i++) {
+      var dt = rows[i]["DateTime"];
+      if (!dt) continue;
+      var day = dt.slice(0, 10);
+      daySet[day] = true;
+      var hr = rows[i]["Hourly Rain"];
+      if (hr === null || hr === undefined || isNaN(Number(hr))) continue;
+      rainMap[dt.slice(0, 16).replace("T", " ")] = Number(hr);
+    }
+    var result = {};
+    for (var d in daySet) {
+      var total = 0;
+      for (var h = 0; h < 24; h++) {
+        var hh = (h < 10 ? "0" + h : "" + h);
+        var v55 = rainMap[d + " " + hh + ":55"];
+        var v60;
+        if (h < 23) {
+          var nextH = (h + 1 < 10 ? "0" + (h + 1) : "" + (h + 1));
+          v60 = rainMap[d + " " + nextH + ":00"];
+        } else {
+          // h = 23 : v60 = lendemain 00:00 (si les données couvrent plusieurs jours)
+          var dd = new Date(d + "T00:00:00Z");
+          dd.setUTCDate(dd.getUTCDate() + 1);
+          v60 = rainMap[dd.toISOString().slice(0, 10) + " 00:00"];
+        }
+        total += Math.max(v55 !== undefined ? v55 : 0, v60 !== undefined ? v60 : 0);
+      }
+      result[d] = Math.round(total * 10) / 10;
+    }
+    return result;
+  }
+
   function aggregate(rows, from, to) {
-    var days = {}, months = {}, hours = {};
+    var days = {}, months = {};
     var k = {
       n: 0, tSum: 0, tMax: -Infinity, tMaxDt: null, tMin: Infinity, tMinDt: null,
       gustMax: -Infinity, gustDt: null, uvMax: -Infinity, humSum: 0, rainHours: 0
@@ -180,7 +219,6 @@
       if (!dt) continue;
       var day = dt.slice(0, 10);
       var month = dt.slice(0, 7);
-      var hour = dt.slice(0, 13);
       var t = r["Temperature"];
       var tVal = (t === null || t === undefined) ? null : Number(t);
       var hum = r["Humidity"];
@@ -223,24 +261,15 @@
       if (press !== null && press !== undefined) { m.pressSum += Number(press); m.pressN++; }
       if (gust !== null && gust !== undefined) m.gust = Math.max(m.gust, Number(gust));
       if (uv !== null && uv !== undefined) m.uv = Math.max(m.uv, Number(uv));
-
-      var hr = r["Hourly Rain"];
-      if (hr !== null && hr !== undefined) {
-        var hv = Number(hr);
-        if (!(hour in hours)) hours[hour] = { sum: 0, n: 0 };
-        hours[hour].sum += hv;
-        hours[hour].n++;
-      }
     }
 
-    // Moyenne horaire de la pluie, puis répartition par jour et par mois
-    for (var h in hours) {
-      var dk = h.slice(0, 10);
-      var mk = h.slice(0, 7);
-      var hAvg = hours[h].sum / hours[h].n;
-      dayObj(dk).rain += hAvg;
-      monthObj(mk).rain += hAvg;
-      k.rainHours++;
+    // Cumul de pluie par jour selon la règle MAX(Xh55, (X+1)h00)
+    var rainByDay = computeRainByDay(rows);
+    for (var dk in rainByDay) {
+      var rv = rainByDay[dk];
+      dayObj(dk).rain += rv;
+      monthObj(dk.slice(0, 7)).rain += rv;
+      if (rv > 0) k.rainHours++;
     }
 
     return { k: k, days: days, months: months, expMonths: computeExpMonths(from, to) };
@@ -437,7 +466,7 @@
       { label: "Minimale absolue", value: fmt(k.tMin, 1), unit: "°C", sub: k.tMinDt ? "Le " + dayOf(k.tMinDt) : "" },
       { label: "Jours Tmax > 35 °C", value: fmt(hotDays, 0), sub: "Jours de forte chaleur sur la période", cls: "red" },
       { label: "Jours Tmin < 0 °C", value: fmt(frostDays, 0), sub: "Jours de gel sur la période" },
-      { label: "Pluviométrie estimée", value: fmt(k.n ? k.rainHours ? aggRainTotal(agg) : 0 : null, 0), unit: "mm", sub: "Cumul estimé (dédup. horaire)" },
+      { label: "Pluviométrie estimée", value: fmt(k.n ? k.rainHours ? aggRainTotal(agg) : 0 : null, 0), unit: "mm", sub: "Cumul (règle MAX Xh55/(X+1)h00)" },
       { label: "Rafale maximale", value: fmt(k.gustMax, 0), sub: k.gustDt ? "Le " + dayOf(k.gustDt) : "", cls: "red" },
       { label: "UV maximal", value: fmt(k.uvMax, 1), sub: "Indice UV", cls: "magenta" },
       { label: "Humidité moyenne", value: fmt(k.n ? k.humSum / k.n : null, 0), unit: "%", sub: "Moyenne sur la période" }
