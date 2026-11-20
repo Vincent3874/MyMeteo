@@ -732,12 +732,13 @@
   }
 
   // ------------------------------------------------------------------
-  // Années disponibles : bornes min/max de "DateTime" dans la table
+  // Années disponibles : bornes min/max de "date" dans DailyIndicators
+  // (permet de purger régulièrement MyMeteoData)
   // ------------------------------------------------------------------
   function fetchOneDateTime(order) {
-    var u = CFG.url + "/rest/v1/" + CFG.table +
-      "?select=" + encodeURIComponent('"DateTime"') +
-      '&order="DateTime".' + order + "&limit=1";
+    var u = CFG.url + "/rest/v1/" + IND_TABLE +
+      "?select=date" +
+      '&order=date.' + order + "&limit=1";
     return fetch(u, {
       headers: {
         "apikey": CFG.key,
@@ -747,7 +748,7 @@
       if (!r.ok) throw new Error("Erreur HTTP " + r.status);
       return r.json();
     }).then(function (rows) {
-      return rows.length ? rows[0]["DateTime"] : null;
+      return rows.length ? rows[0].date : null;
     });
   }
 
