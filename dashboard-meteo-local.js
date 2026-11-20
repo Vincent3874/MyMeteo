@@ -1104,8 +1104,16 @@
 
   function renderAnalyse(stats) {
     stats.sort(function (a, b) { return a.year - b.year; });
-    document.getElementById("anaTableHeatWrap").innerHTML = renderAnaTable(stats, ANA_HEAT_ROWS);
-    document.getElementById("anaTableColdWrap").innerHTML = renderAnaTable(stats, ANA_COLD_ROWS);
+    var heatWrap = document.getElementById("anaTableHeatWrap");
+    var coldWrap = document.getElementById("anaTableColdWrap");
+    if (!heatWrap || !coldWrap) {
+      // HTML et JS de versions différentes (cache navigateur juste après un déploiement)
+      var e = new Error("page HTML/JS de versions différentes (cache) : rechargez la page — Ctrl+F5 (Windows) ou Cmd+Maj+R (Mac)");
+      e.noNetworkHint = true;
+      throw e;
+    }
+    heatWrap.innerHTML = renderAnaTable(stats, ANA_HEAT_ROWS);
+    coldWrap.innerHTML = renderAnaTable(stats, ANA_COLD_ROWS);
   }
 
   function loadAnalyse(force) {
@@ -1152,7 +1160,7 @@
       aStatus("Analyse terminée — " + stats.length + " année(s), de " + first + " à " + last + ".");
       if (btn) btn.disabled = false;
     }).catch(function (err) {
-      aStatus("Échec : " + err.message + " — vérifiez votre connexion Internet.", true);
+      aStatus("Échec : " + err.message + (err && err.noNetworkHint ? "" : " — vérifiez votre connexion Internet."), true);
       if (btn) btn.disabled = false;
     });
   }
