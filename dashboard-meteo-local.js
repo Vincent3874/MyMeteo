@@ -988,82 +988,124 @@
   }
 
   // ------------------------------------------------------------------
-  // Onglet "Analyse" : tableau comparatif par année
+  // Onglet "Analyse" : tableaux comparatifs par année (chaleur / froid)
   // ------------------------------------------------------------------
   var anaLoaded = false;
 
-  var ANA_COLS = [
-    { key: "rel",   label: "Fiabilité",          dec: 0, noHl: true },
-    { key: "hot",   label: "Jours Tmax > 35 °C", dec: 0 },
-    { key: "frost", label: "Jours Tmin < 0 °C",  dec: 0 },
-    { key: "tMoy",  label: "Tmoy (°C)",          dec: 1 },
-    { key: "tMin",  label: "Tmin absolue (°C)",  dec: 1 },
-    { key: "tMax",  label: "Tmax absolue (°C)",  dec: 1 }
+  // Colonnes des deux tableaux de l'onglet Analyse : périodes de chaleur
+  // (Tmax > 35 °C) et périodes de froid (Tmin < 0 °C).
+  // Les années sont en lignes, les indicateurs en colonnes.
+  var ANA_HEAT_ROWS = [
+    { key: "rel",       label: "Fiabilité",                                 dec: 0, noHl: true },
+    { key: "tMax",      label: "Tmax absolue (°C)",                         dec: 1 },
+    { key: "hot",       label: "Jours Tmax > 35 °C",                        dec: 0 },
+    { key: "hotRun3",   label: "Épisodes Tmax > 35 °C (≥ 3 j consécutifs)", dec: 0 },
+    { key: "hotRunMax", label: "Max de jours consécutifs Tmax > 35 °C",     dec: 0 }
   ];
+
+  var ANA_COLD_ROWS = [
+    { key: "rel",         label: "Fiabilité",                                dec: 0, noHl: true },
+    { key: "tMin",        label: "Tmin absolue (°C)",                        dec: 1 },
+    { key: "frost",       label: "Jours Tmin < 0 °C",                        dec: 0 },
+    { key: "frostRun3",   label: "Épisodes Tmin < 0 °C (≥ 3 j consécutifs)", dec: 0 },
+    { key: "frostRunMax", label: "Max de jours consécutifs Tmin < 0 °C",     dec: 0 }
+  ];
+
+  // Nombre d'épisodes d'au moins 3 jours consécutifs vérifiant `test`,
+  // et longueur de la plus longue série consécutive. Deux jours sont
+  // consécutifs s'ils se suivent dans le calendrier (un jour sans donnée
+  // casse la série).
+  function streaks(dayKeys, days, test) {
+    var run = 0, runs3 = 0, maxRun = 0, prev = null;
+    for (var i = 0; i < dayKeys.length; i++) {
+      var dk = dayKeys[i];
+      var consecutive = prev !== null &&
+        (new Date(dk + "T00:00:00Z") - new Date(prev + "T00:00:00Z")) === 86400000;
+      if (test(days[dk])) {
+        // Un jour au-delà du seuil mais non consécutif clôt la série précédente
+        if (!consecutive && run >= 3) runs3++;
+        run = consecutive ? run + 1 : 1;
+        if (run > maxRun) maxRun = run;
+      } else {
+        if (run >= 3) runs3++;
+        run = 0;
+      }
+      prev = dk;
+    }
+    if (run >= 3) runs3++;
+    return { runs3: runs3, maxRun: maxRun };
+  }
 
   function computeYearStatsFromAgg(year, agg) {
     var expTot = 0;
     for (var ek in agg.expMonths) expTot += agg.expMonths[ek];
+    var dayKeys = Object.keys(agg.days).sort();
     var hot = 0, frost = 0, tMin = Infinity, tMax = -Infinity;
-    for (var dk in agg.days) {
-      var d = agg.days[dk];
+    for (var i = 0; i < dayKeys.length; i++) {
+      var d = agg.days[dayKeys[i]];
       if (d.hi > 35) hot++;
       if (d.lo < 0) frost++;
       if (d.lo < tMin) tMin = d.lo;
       if (d.hi > tMax) tMax = d.hi;
     }
+    var hotSt = streaks(dayKeys, agg.days, function (d) { return d.hi > 35; });
+    var frostSt = streaks(dayKeys, agg.days, function (d) { return d.lo < 0; });
     return {
       year: year,
       rel: expTot ? Math.round(100 * agg.k.n / expTot) : null,
       hot: hot,
       frost: frost,
-      tMoy: agg.k.tCount ? +(agg.k.tSum / agg.k.tCount).toFixed(1) : null,
+      hotRun3: hotSt.runs3,
+      hotRunMax: hotSt.maxRun,
+      frostRun3: frostSt.runs3,
+      frostRunMax: frostSt.maxRun,
       tMin: tMin === Infinity ? null : tMin,
       tMax: tMax === -Infinity ? null : tMax
     };
   }
 
-  function renderAnalyse(stats) {
-    stats.sort(function (a, b) { return a.year - b.year; });
-    // Records min/max de chaque indicateur sur l'ensemble des années
+  // Tableau : années en lignes, indicateurs en colonnes.
+  // Records min/max de chaque indicateur (colonne) sur l'ensemble des années.
+  function renderAnaTable(stats, rows) {
     var ext = {};
-    ANA_COLS.forEach(function (c) {
-      if (c.noHl) { ext[c.key] = null; return; }
+    rows.forEach(function (r) {
+      if (r.noHl) { ext[r.key] = null; return; }
       var vals = [];
       stats.forEach(function (s) {
-        var v = s[c.key];
+        var v = s[r.key];
         if (v !== null && v !== undefined && !isNaN(v)) vals.push(v);
       });
-      if (!vals.length) { ext[c.key] = null; return; }
+      if (!vals.length) { ext[r.key] = null; return; }
       var mn = Math.min.apply(null, vals);
       var mx = Math.max.apply(null, vals);
-      ext[c.key] = (mn === mx) ? null : { min: mn, max: mx };
+      ext[r.key] = (mn === mx) ? null : { min: mn, max: mx };
     });
 
     var html = '<table class="ana-table"><thead><tr><th>Année</th>';
-    ANA_COLS.forEach(function (c) { html += "<th>" + c.label + "</th>"; });
+    rows.forEach(function (r) { html += "<th>" + r.label + "</th>"; });
     html += "</tr></thead><tbody>";
     stats.forEach(function (s) {
       html += '<tr><td class="year">' + s.year + "</td>";
-      ANA_COLS.forEach(function (c) {
-        var v = s[c.key];
+      rows.forEach(function (r) {
+        var v = s[r.key];
         var cls = "";
-        var e = ext[c.key];
+        var e = ext[r.key];
         if (e && v !== null && v !== undefined && !isNaN(v)) {
           if (v === e.max) cls = "hl-max";
           else if (v === e.min) cls = "hl-min";
         }
-        html += '<td' + (cls ? ' class="' + cls + '"' : "") + ">" + fmt(v, c.dec) + "</td>";
+        html += '<td' + (cls ? ' class="' + cls + '"' : "") + ">" + fmt(v, r.dec) + "</td>";
       });
       html += "</tr>";
     });
     html += "</tbody></table>";
-    html += '<div class="ana-legend">' +
-      '<span><span class="sw max"></span>record max de l\'indicateur sur les années</span>' +
-      '<span><span class="sw min"></span>record min de l\'indicateur sur les années</span>' +
-      "<span>Fiabilité = relevés reçus / attendus (288/j, 96/j du 19/04 au 01/11/2026 ; période en cours proratisée jusqu'à maintenant)</span>" +
-      "</div>";
-    document.getElementById("anaTableWrap").innerHTML = html;
+    return html;
+  }
+
+  function renderAnalyse(stats) {
+    stats.sort(function (a, b) { return a.year - b.year; });
+    document.getElementById("anaTableHeatWrap").innerHTML = renderAnaTable(stats, ANA_HEAT_ROWS);
+    document.getElementById("anaTableColdWrap").innerHTML = renderAnaTable(stats, ANA_COLD_ROWS);
   }
 
   function loadAnalyse(force) {

@@ -143,13 +143,23 @@
   <div id="page-ana" class="tabPage" hidden>
     <div class="controls">
       <button id="refreshAna" class="primary" onclick="loadAnalyse(true)">Actualiser</button>
-      <div id="status-ana" class="status">Le tableau comparatif se charge à l'ouverture de l'onglet.</div>
+      <div id="status-ana" class="status">Les tableaux comparatifs se chargent à l'ouverture de l'onglet.</div>
     </div>
     <div class="charts">
       <div class="card wide">
-        <h3>Analyse annuelle <span>indicateurs calculés année par année — records min/max de chaque indicateur mis en évidence</span></h3>
-        <div class="body table-body" id="anaTableWrap"></div>
+        <h3>Périodes de chaleur <span>Tmax > 35 °C — indicateurs par année, records min/max de chaque indicateur mis en évidence</span></h3>
+        <div class="body table-body" id="anaTableHeatWrap"></div>
       </div>
+      <div class="card wide">
+        <h3>Périodes de froid <span>Tmin < 0 °C — indicateurs par année, records min/max de chaque indicateur mis en évidence</span></h3>
+        <div class="body table-body" id="anaTableColdWrap"></div>
+      </div>
+    </div>
+    <div class="ana-legend">
+      <span><span class="sw max"></span>record max de l'indicateur sur les années</span>
+      <span><span class="sw min"></span>record min de l'indicateur sur les années</span>
+      <span>Fiabilité = relevés reçus / attendus (288/j, 96/j du 19/04 au 01/11/2026 ; période en cours proratisée jusqu'à maintenant)</span>
+      <span>Épisode = période d'au moins 3 jours consécutifs au-delà du seuil ; un jour sans donnée casse la série</span>
     </div>
   </div>
 
