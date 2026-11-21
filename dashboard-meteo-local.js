@@ -304,21 +304,24 @@
     var days = {}, months = {};
     var k = {
       n: 0, tSum: 0, tCount: 0, tMax: -Infinity, tMaxDt: null, tMin: Infinity, tMinDt: null,
-      gustMax: -Infinity, gustDt: null, uvMax: -Infinity, humSum: 0, rainHours: 0
+      gustMax: -Infinity, gustDt: null, uvMax: -Infinity, humSum: 0, rainHours: 0,
+      tSumAvg: 0, tDays: 0, relSum: 0, relDays: 0
     };
 
     function dayObj(key) {
       if (!days[key]) days[key] = {
         n: 0, tSum: 0, lo: Infinity, hi: -Infinity, humSum: 0,
         gust: -1, gustDt: null, rain: 0, rel: null,
-        pressSum: 0, pressN: 0
+        pressSum: 0, pressN: 0,
+        tAvgSum: 0, tAvgN: 0
       };
       return days[key];
     }
     function monthObj(key) {
       if (!months[key]) months[key] = {
         n: 0, tSum: 0, lo: Infinity, hi: -Infinity, humSum: 0, pressSum: 0, pressN: 0,
-        gust: -1, uv: -1, windSum: 0, rain: 0
+        gust: -1, uv: -1, windSum: 0, rain: 0,
+        tAvgSum: 0, tAvgN: 0
       };
       return months[key];
     }
@@ -344,6 +347,8 @@
         : Math.round(Number(r.reliability) * 100);
 
       k.n += n;
+      if (tAvg !== null) { k.tSumAvg += tAvg; k.tDays++; }
+      k.relSum += rel / 100; k.relDays++;
       if (tAvg !== null && tc) {
         k.tSum += tAvg * tc;
         k.tCount += tc;
@@ -358,6 +363,7 @@
       var d = dayObj(day);
       d.n += n;
       d.rel = rel;
+      if (tAvg !== null) { d.tAvgSum += tAvg; d.tAvgN++; }
       if (tAvg !== null && tc) {
         d.tSum += tAvg * tc;
         if (tMax !== null && tMax > d.hi) d.hi = tMax;
@@ -370,6 +376,7 @@
 
       var m = monthObj(month);
       m.n += n;
+      if (tAvg !== null) { m.tAvgSum += tAvg; m.tAvgN++; }
       if (tAvg !== null && tc) {
         m.tSum += tAvg * tc;
         if (tMax !== null && tMax > m.hi) m.hi = tMax;
@@ -406,6 +413,16 @@
         if (bd.rel === null) bd.rel = Math.round(100 * bd.n / Math.max(1, expectedForDay(dk, new Date())));
         bd.rain += ed.rain;
         bd.pressSum += ed.pressSum; bd.pressN += ed.pressN;
+        if (ed.n > 0) {
+          var dayAvg = ed.tSum / ed.n;
+          k.tSumAvg += dayAvg;
+          k.tDays++;
+          bd.tAvgSum += dayAvg; bd.tAvgN++;
+          monthObj(dk.slice(0, 7)).tAvgSum += dayAvg;
+          monthObj(dk.slice(0, 7)).tAvgN++;
+          k.relSum += ed.n / Math.max(1, expectedForDay(dk, new Date()));
+          k.relDays++;
+        }
       }
       for (var mk in extra.months) {
         var em = extra.months[mk];
@@ -448,26 +465,27 @@
 
   function renderKpis(agg, meta) {
     var k = agg.k;
-    var expTot = 0;
-    for (var ek in agg.expMonths) expTot += agg.expMonths[ek];
+    var dayKeys = Object.keys(agg.days).sort();
     var hotDays = 0, frostDays = 0;
     for (var dk in agg.days) {
       var d = agg.days[dk];
       if (d.hi > 35) hotDays++;
       if (d.lo < 0) frostDays++;
     }
+    var hotSt = streaks(dayKeys, agg.days, function (d) { return d.hi > 35; });
     // Date du jour du max/min (DailyIndicators ne stocke pas l'heure exacte)
     function dayOf(iso) { return iso ? frDate(String(iso).slice(0, 10)) : ""; }
     var items = [
-      { label: "Relevés chargés", value: fmt(k.n, 0), sub: (meta && meta.first) ? "Du " + frDate(meta.first) + " au " + frDate(meta.last) : "—" },
-      { label: "Fiabilité moyenne", value: expTot ? fmt(Math.round(100 * k.n / expTot), 0) : "—", unit: "%", sub: "reçus / attendus" },
-      { label: "Température moyenne", value: fmt(k.tCount ? k.tSum / k.tCount : null, 1), unit: "°C", sub: "Moyenne sur la période" },
+      { label: "Fiabilité moyenne", value: k.relDays ? fmt(Math.round(100 * k.relSum / k.relDays), 0) : "—", unit: "%", sub: "moyenne des fiabilités journalières" },
+      { label: "Température moyenne", value: fmt(k.tDays ? k.tSumAvg / k.tDays : null, 1), unit: "°C", sub: "Moyenne journalière sur la période" },
       { label: "Maximale absolue", value: fmt(k.tMax, 1), unit: "°C", sub: k.tMaxDt ? "Le " + dayOf(k.tMaxDt) : "", cls: "red" },
       { label: "Minimale absolue", value: fmt(k.tMin, 1), unit: "°C", sub: k.tMinDt ? "Le " + dayOf(k.tMinDt) : "" },
       { label: "Jours Tmax > 35 °C", value: fmt(hotDays, 0), sub: "Jours de forte chaleur sur la période", cls: "red" },
+      { label: "Épisodes Tmax > 35 °C (≥ 3 j)", value: fmt(hotSt.runs3, 0), sub: "Séries d'au moins 3 jours consécutifs", cls: "red" },
+      { label: "Max jours consécutifs Tmax > 35 °C", value: fmt(hotSt.maxRun, 0), sub: "Plus longue série de forte chaleur", cls: "red" },
       { label: "Jours Tmin < 0 °C", value: fmt(frostDays, 0), sub: "Jours de gel sur la période" },
       { label: "Pluviométrie estimée", value: fmt(k.n ? k.rainHours ? aggRainTotal(agg) : 0 : null, 0), unit: "mm", sub: "Cumul (règle MAX Xh55/(X+1)h00)" },
-      { label: "Rafale maximale", value: fmt(k.gustMax, 0), sub: k.gustDt ? "Le " + dayOf(k.gustDt) : "", cls: "red" },
+      { label: "Rafale maximale", value: fmt(k.gustMax, 0), unit: " km/h", sub: k.gustDt ? "Le " + dayOf(k.gustDt) : "", cls: "red" },
       { label: "UV maximal", value: fmt(k.uvMax, 1), sub: "Indice UV", cls: "magenta" },
       { label: "Humidité moyenne", value: fmt(k.n ? k.humSum / k.n : null, 0), unit: "%", sub: "Moyenne sur la période" }
     ];
@@ -554,7 +572,7 @@
       return {
         key: dk,
         label: dk.slice(8, 10) + "/" + dk.slice(5, 7),
-        tAvg: d.n ? d.tSum / d.n : null,
+        tAvg: d.tAvgN ? d.tAvgSum / d.tAvgN : null,
         tHi: d.hi === -Infinity ? null : d.hi,
         tLo: d.lo === Infinity ? null : d.lo,
         rain: +d.rain.toFixed(1),
@@ -631,7 +649,7 @@
     // --- Agrégats mensuels ---
     var mKeys = Object.keys(agg.months).sort();
     var mLbl = mKeys.map(monthLabel);
-    var mAvg = mKeys.map(function (k) { var m = agg.months[k]; return m.n ? +(m.tSum / m.n).toFixed(1) : null; });
+    var mAvg = mKeys.map(function (k) { var m = agg.months[k]; return m.tAvgN ? +(m.tAvgSum / m.tAvgN).toFixed(1) : null; });
     var mHi = mKeys.map(function (k) { return agg.months[k].hi === -Infinity ? null : agg.months[k].hi; });
     var mLo = mKeys.map(function (k) { return agg.months[k].lo === Infinity ? null : agg.months[k].lo; });
     var mRain = mKeys.map(function (k) { return +agg.months[k].rain.toFixed(1); });
@@ -857,8 +875,7 @@
       renderLatest(latest ? [latest] : rawRows);
       renderCharts(agg);
       toggleView();
-      setStatus("Terminé — " + fmt(agg.k.n, 0) + " relevés, du " +
-        (meta.first ? frDate(meta.first) : "—") + " au " + (meta.last ? frDate(meta.last) : "—") + ".");
+      setStatus("Terminé.");
       btn.disabled = false;
     }).catch(function (err) {
       setStatus("Échec : " + err.message + " — vérifiez votre connexion Internet.", true);
@@ -953,7 +970,7 @@
     for (var m = 1; m <= 12; m++) {
       var mk = y + "-" + (m < 10 ? "0" + m : "" + m);
       var mo = agg.months[mk];
-      stMoy.push(mo && mo.n ? +(mo.tSum / mo.n).toFixed(1) : null);
+      stMoy.push(mo && mo.tAvgN ? +(mo.tAvgSum / mo.tAvgN).toFixed(1) : null);
       stRain.push(mo ? +mo.rain.toFixed(1) : 0);
       stRel.push(mo && agg.expMonths && agg.expMonths[mk] ? Math.round(100 * mo.n / agg.expMonths[mk]) : null);
     }
