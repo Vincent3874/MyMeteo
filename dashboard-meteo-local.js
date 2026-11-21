@@ -38,6 +38,12 @@
 
   function isoDay(d) { return d.toISOString().slice(0, 10); }
 
+  // Date du jour en heure locale (corrige le décalage UTC de toISOString)
+  function isoDayLocal(d) {
+    var p = function (n) { return (n < 10 ? "0" : "") + n; };
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+  }
+
   // ------------------------------------------------------------------
   // Récupération paginée des données via l'API REST (PostgREST)
   // ------------------------------------------------------------------
@@ -140,14 +146,14 @@
   }
 
   // Attendu pour un jour donné : journée complète, sauf pour aujourd'hui où
-  // seuls les créneaux déjà écoulés (UTC) sont comptés ; 0 pour un jour futur.
+  // seuls les créneaux déjà écoulés (heure locale) sont comptés ; 0 pour un jour futur.
   function expectedForDay(dayIso, now) {
     var perDay = expectedPerDay(dayIso);
-    var todayIso = isoDay(now);
+    var todayIso = isoDayLocal(now);
     if (dayIso < todayIso) return perDay;
     if (dayIso > todayIso) return 0;
     var step = perDay === 96 ? 15 : 5;
-    var slots = Math.floor((now.getUTCHours() * 60 + now.getUTCMinutes()) / step) + 1;
+    var slots = Math.floor((now.getHours() * 60 + now.getMinutes()) / step) + 1;
     return Math.min(perDay, slots);
   }
 
@@ -282,7 +288,7 @@
     var expMonths = {};
     if (!from) return expMonths;
     var nowRef = new Date();
-    var todayIso = isoDay(nowRef);
+    var todayIso = isoDayLocal(nowRef);
     var d0 = new Date(from + "T00:00:00Z");
     var end = to ? new Date(to + "T00:00:00Z") : new Date(Date.UTC(2100, 0, 1));
     while (d0 < end) {
@@ -743,7 +749,7 @@
     var isCustom = document.getElementById("period").value === "custom";
     document.getElementById("customDates").style.display = isCustom ? "inline-flex" : "none";
     if (isCustom) {
-      var today = isoDay(new Date());
+      var today = isoDayLocal(new Date());
       if (!document.getElementById("dateFrom").value) document.getElementById("dateFrom").value = today;
       if (!document.getElementById("dateTo").value) document.getElementById("dateTo").value = today;
     }
@@ -818,9 +824,9 @@
       return { from: y + "-01-01", to: (y + 1) + "-01-01" };
     }
     switch (value) {
-      case "d30": { var d = new Date(today.getTime() - 29 * 86400000); return { from: isoDay(d), to: null }; }
-      case "d90": { var d2 = new Date(today.getTime() - 89 * 86400000); return { from: isoDay(d2), to: null }; }
-      case "m12": { var d3 = new Date(today.getTime() - 365 * 86400000); return { from: isoDay(d3), to: null }; }
+      case "d30": { var d = new Date(today); d.setDate(d.getDate() - 29); return { from: isoDayLocal(d), to: null }; }
+      case "d90": { var d2 = new Date(today); d2.setDate(d2.getDate() - 89); return { from: isoDayLocal(d2), to: null }; }
+      case "m12": { var d3 = new Date(today); d3.setDate(d3.getDate() - 365); return { from: isoDayLocal(d3), to: null }; }
       case "all": return { from: "2024-01-01", to: null };
       case "custom": {
         var from = document.getElementById("dateFrom").value;
@@ -848,7 +854,7 @@
       // Split de la plage :
       //  - historique (jusqu'à hier inclus)  -> DailyIndicators (pré-calculé)
       //  - jour en cours (et éventuel futur)   -> MyMeteoData brut (léger, ~288 lignes max)
-      var today = isoDay(new Date());
+      var today = isoDayLocal(new Date());
       var indFrom = range.from < today ? range.from : null;
       var indTo = range.to ? (range.to <= today ? range.to : today) : today;
       var rawFrom = range.from > today ? range.from : today;
@@ -940,7 +946,7 @@
     var y = Number(sel.value.slice(1));
     var yearStart = y + "-01-01", yearEnd = (y + 1) + "-01-01";
     nStatus("Chargement de l'année " + y + "…");
-    var today = isoDay(new Date());
+    var today = isoDayLocal(new Date());
     var indFrom = yearStart < today ? yearStart : null;
     var indTo = yearEnd <= today ? yearEnd : today;
     var rawFrom = yearStart > today ? yearStart : today;
@@ -1144,7 +1150,7 @@
     }
     if (btn) btn.disabled = true;
     aStatus("Détermination des années disponibles…");
-    var today = isoDay(new Date());
+    var today = isoDayLocal(new Date());
     Promise.all([fetchOneDateTime("asc"), fetchOneDateTime("desc")]).then(function (b) {
       if (!b[0] || !b[1]) throw new Error("Impossible de déterminer la plage de dates de la station.");
       if (Number(b[0].slice(0, 4)) < 2024) b[0] = "2024-01-01"; // années complètes uniquement
