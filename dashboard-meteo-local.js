@@ -567,6 +567,21 @@
       borderWidth: 1.5, borderDash: [4, 4], pointRadius: 0, pointHoverRadius: 3, tension: 0.2, fill: false };
   }
 
+  // Fiabilité mensuelle = moyenne simple des fiabilités journalières du mois
+  // (chaque jour compte pour 1, pas de pondération par les relevés attendus)
+  function monthRelAvg(agg, mk) {
+    var sum = 0, count = 0;
+    for (var dk in agg.days) {
+      if (dk.slice(0, 7) !== mk) continue;
+      var d = agg.days[dk];
+      var r = (d.rel !== null && d.rel !== undefined)
+        ? d.rel
+        : Math.round(100 * d.n / Math.max(1, expectedForDay(dk, new Date())));
+      sum += r; count++;
+    }
+    return count ? Math.round(sum / count) : null;
+  }
+
   function renderCharts(agg) {
     var C = { primary: "#003748", cyan: "#00DBDB", magenta: "#FF00D3", red: "#ED0036", gray: "#809BA3" };
     Chart.defaults.font.family = "Sora";
@@ -661,10 +676,7 @@
     var mRain = mKeys.map(function (k) { return +agg.months[k].rain.toFixed(1); });
     var mPress = mKeys.map(function (k) { var m = agg.months[k]; return m.pressN ? +(m.pressSum / m.pressN).toFixed(1) : null; });
     var mGust = mKeys.map(function (k) { return agg.months[k].gust === -1 ? null : agg.months[k].gust; });
-    var mRel = mKeys.map(function (k) {
-      var exp = agg.expMonths ? agg.expMonths[k] : null;
-      return exp ? Math.round(100 * agg.months[k].n / exp) : null;
-    });
+    var mRel = mKeys.map(function (k) { return monthRelAvg(agg, k); });
 
     // Vue mensuelle — 4 cartes en barres
     charts["chMonthlyTemp"] = new Chart(document.getElementById("chMonthlyTemp"), {
@@ -978,7 +990,7 @@
       var mo = agg.months[mk];
       stMoy.push(mo && mo.tAvgN ? +(mo.tAvgSum / mo.tAvgN).toFixed(1) : null);
       stRain.push(mo ? +mo.rain.toFixed(1) : 0);
-      stRel.push(mo && agg.expMonths && agg.expMonths[mk] ? Math.round(100 * mo.n / agg.expMonths[mk]) : null);
+      stRel.push(mo ? monthRelAvg(agg, mk) : null);
     }
 
     charts["chNormTemp-" + key] = new Chart(document.getElementById("chNormTemp-" + key), {
@@ -1060,8 +1072,6 @@
   }
 
   function computeYearStatsFromAgg(year, agg) {
-    var expTot = 0;
-    for (var ek in agg.expMonths) expTot += agg.expMonths[ek];
     var dayKeys = Object.keys(agg.days).sort();
     var hot = 0, frost = 0, tMin = Infinity, tMax = -Infinity;
     for (var i = 0; i < dayKeys.length; i++) {
@@ -1075,7 +1085,8 @@
     var frostSt = streaks(dayKeys, agg.days, function (d) { return d.lo < 0; });
     return {
       year: year,
-      rel: expTot ? Math.round(100 * agg.k.n / expTot) : null,
+      // Fiabilité = moyenne simple des fiabilités journalières (chaque jour compte pour 1)
+      rel: agg.k.relDays ? Math.round(100 * agg.k.relSum / agg.k.relDays) : null,
       hot: hot,
       frost: frost,
       hotRun3: hotSt.runs3,
